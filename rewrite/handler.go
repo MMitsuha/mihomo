@@ -117,7 +117,11 @@ func (Handler) HandleResponse(session *mitm.Session) *http.Response {
 		body, err := mitm.ReadDecompressedBody(resp, MaxRewriteBodySize)
 		_ = resp.Body.Close()
 		if err != nil {
-			return nil
+			// Body has been (partially) consumed and closed; returning
+			// the original resp would write Content-Length headers with
+			// no payload behind them. Surface a 502 instead so the wire
+			// response is well-formed.
+			return session.NewErrorResponse(err)
 		}
 		newBody := []byte(rule.ReplaceSubPayload(string(body)))
 		resp.Body = io.NopCloser(bytes.NewReader(newBody))
