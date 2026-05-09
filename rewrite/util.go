@@ -28,9 +28,13 @@ func CanRewriteRequestBody(contentLength int64, contentType string) bool {
 }
 
 // CanRewriteResponseBody reports whether a response body can be rewritten.
-// Chunked responses are accepted (ContentLength == -1).
+// Like requests, this requires a known Content-Length within the cap. Chunked
+// or close-delimited responses (ContentLength == -1) are skipped: they can
+// stream past the cap at any time, and a partial read can't be safely
+// re-streamed to the client, so we'd otherwise have to fail the exchange
+// with 502 instead of just letting the original response through.
 func CanRewriteResponseBody(contentLength int64, contentType string) bool {
-	if contentLength == 0 || contentLength > MaxRewriteBodySize {
+	if contentLength <= 0 || contentLength > MaxRewriteBodySize {
 		return false
 	}
 	return contentTypeAllowed(contentType)
