@@ -36,7 +36,12 @@ func (NopHandler) HandleRequest(*Session) (*http.Request, *http.Response) { retu
 func (NopHandler) HandleResponse(*Session) *http.Response                 { return nil }
 func (NopHandler) HandleError(*Session, error)                            {}
 
-// prepareRequest fills in Host/scheme on a freshly read HTTP request.
+// prepareRequest fills in Host/scheme on a freshly read HTTP request. It does
+// not touch Accept-Encoding — that's a per-rule concern and is constrained
+// inside Handler.HandleRequest only when a body rewrite needs to inspect the
+// response. Touching it unconditionally here would silently strip br/zstd
+// encodings from traffic that no rule is going to rewrite, contradicting the
+// "unmatched traffic passes through unchanged" contract in the README.
 func prepareRequest(tlsState *tls.ConnectionState, req *http.Request) {
 	if h := req.Header.Get("Host"); h != "" {
 		req.Host = h
@@ -50,9 +55,6 @@ func prepareRequest(tlsState *tls.ConnectionState, req *http.Request) {
 	if tlsState != nil {
 		req.TLS = tlsState
 		req.URL.Scheme = "https"
-	}
-	if req.Header.Get("Accept-Encoding") != "" {
-		req.Header.Set("Accept-Encoding", "gzip")
 	}
 }
 

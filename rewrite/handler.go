@@ -26,7 +26,19 @@ var _ mitm.Handler = (*Handler)(nil)
 //   - a synthetic response to short-circuit the exchange.
 func (Handler) HandleRequest(session *mitm.Session) (*http.Request, *http.Response) {
 	req := session.Request()
-	rule, sub, found := matchRule(req.URL.String(), true)
+	url := req.URL.String()
+
+	// If a response-body rule will want to rewrite the reply, constrain
+	// Accept-Encoding to gzip so mitm.ReadDecompressedBody can decode it.
+	// We do not touch other URLs — leaving br/zstd alone preserves origin
+	// behaviour and matches the README's passthrough guarantee.
+	if req.Header.Get("Accept-Encoding") != "" {
+		if respRule, _, ok := matchRule(url, false); ok && respRule.RuleType() == C.MitmResponseBody {
+			req.Header.Set("Accept-Encoding", "gzip")
+		}
+	}
+
+	rule, sub, found := matchRule(url, true)
 	if !found {
 		return nil, nil
 	}
