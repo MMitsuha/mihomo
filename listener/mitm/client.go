@@ -40,8 +40,20 @@ func dialUpstream(ctx context.Context, request *http.Request, srcConn net.Conn, 
 		return N.NewBufferedConn(left), nil
 	}
 
+	// Fall back to the URL host if the original ClientHello had no SNI —
+	// otherwise outbound verify fails on a nameless cert.
+	serverName := request.TLS.ServerName
+	if serverName == "" {
+		host, _, err := net.SplitHostPort(address)
+		if err != nil {
+			serverName = address
+		} else {
+			serverName = host
+		}
+	}
+
 	tlsConn := tls.Client(left, &tls.Config{
-		ServerName: request.TLS.ServerName,
+		ServerName: serverName,
 		// Pin ALPN to http/1.1 so an h2-capable upstream can't negotiate
 		// HTTP/2 — our loop only speaks HTTP/1.1.
 		NextProtos:         []string{"http/1.1"},
