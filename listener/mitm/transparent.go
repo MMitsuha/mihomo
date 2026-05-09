@@ -39,7 +39,11 @@ func HandleConnTransparent(c net.Conn, target *C.Metadata, opt *Option, filter H
 		host = target.DstIP.String()
 	}
 
-	conn := N.NewBufferedConn(c)
+	// Use a bufio big enough to peek the largest legal TLS plaintext
+	// fragment (record header + 2^14 bytes). Modern Chrome ClientHellos
+	// with PostQuantum extensions can run >4 KiB; the default bufio size
+	// would force them down the passthrough path.
+	conn := N.NewBufferedConnSize(c, sniPeekBufSize)
 
 	if err := conn.SetReadDeadline(time.Now().Add(peekDeadline)); err != nil {
 		log.Debugln("[MITM] %s: set peek deadline: %s", dst, err.Error())

@@ -22,6 +22,12 @@ var (
 const (
 	readDeadline = 65 * time.Second
 	peekDeadline = time.Second
+
+	// sniPeekBufSize is the bufio buffer size for the initial peek on a
+	// MITM-targeted connection. The TLS plaintext fragment cap is 2^14
+	// bytes plus a 5-byte record header, so 17 KiB comfortably holds any
+	// legal ClientHello.
+	sniPeekBufSize = 17 * 1024
 )
 
 // NewResponse builds a baseline http.Response inheriting the request protocol.

@@ -22,6 +22,17 @@ func NewBufferedConn(c net.Conn) *BufferedConn {
 	return &BufferedConn{bufio.NewReader(c), NewExtendedConn(c), false}
 }
 
+// NewBufferedConnSize is like NewBufferedConn but lets the caller pick the
+// underlying bufio.Reader size. Use this when a single Peek may exceed the
+// default 4 KiB buffer (e.g. peeking a TLS ClientHello whose record can run
+// up to 16 KiB).
+func NewBufferedConnSize(c net.Conn, size int) *BufferedConn {
+	if bc, ok := c.(*BufferedConn); ok {
+		return bc
+	}
+	return &BufferedConn{bufio.NewReaderSize(c, size), NewExtendedConn(c), false}
+}
+
 func WarpConnWithBioReader(c net.Conn, br *bufio.Reader) net.Conn {
 	if br != nil && br.Buffered() > 0 {
 		if bc, ok := c.(*BufferedConn); ok && bc.r == br {
