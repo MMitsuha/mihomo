@@ -252,12 +252,20 @@ func runTransparentLoop(conn *N.BufferedConn, srcConn net.Conn, target *C.Metada
 			}
 		}
 
+		// Bound the upstream round-trip so a wedged origin can't pin the
+		// client conn open indefinitely. The deadline covers both the
+		// request write and the response header read.
+		_ = serverConn.SetWriteDeadline(time.Now().Add(readDeadline))
 		if err := req.Write(serverConn); err != nil {
+			_ = serverConn.SetWriteDeadline(time.Time{})
 			opt.Handler.HandleError(session, err)
 			return
 		}
+		_ = serverConn.SetWriteDeadline(time.Time{})
 
+		_ = serverConn.SetReadDeadline(time.Now().Add(readDeadline))
 		resp, err := http.ReadResponse(serverConn.Reader(), req)
+		_ = serverConn.SetReadDeadline(time.Time{})
 		if err != nil {
 			opt.Handler.HandleError(session, err)
 			return
