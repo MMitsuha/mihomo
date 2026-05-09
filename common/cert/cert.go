@@ -31,9 +31,9 @@ const (
 var serialCounter atomic.Int64
 
 func nextSerial() *big.Int {
-	if serialCounter.Load() == 0 {
-		serialCounter.Store(time.Now().Unix())
-	}
+	// Initialise once. CompareAndSwap so concurrent first callers don't
+	// both Store and then both Add(1), which would mint duplicate serials.
+	serialCounter.CompareAndSwap(0, time.Now().Unix())
 	return big.NewInt(serialCounter.Add(1))
 }
 
