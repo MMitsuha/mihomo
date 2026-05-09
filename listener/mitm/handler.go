@@ -99,10 +99,13 @@ func writeResponse(session *Session, keepAlive bool) error {
 }
 
 // canKeepAlive reports whether the client connection can be reused after
-// writing this exchange. Either side signaling close (req.Close, resp.Close,
-// HTTP/1.0 without explicit Keep-Alive negotiation) or a body whose length
-// is delimited by EOF requires the connection to close. resp.Close is set by
-// http.ReadResponse for all of those upstream cases.
+// writing this exchange. We close when:
+//   - either side set Close on the message (Connection: close, or upstream
+//     reply delimited by EOF — http.ReadResponse populates resp.Close for
+//     both),
+//   - or the request is older than HTTP/1.1 (we don't do the optional 1.0
+//     Keep-Alive negotiation; treating all 1.0 traffic as close avoids the
+//     close-delimited body ambiguity that goes with it).
 func canKeepAlive(req *http.Request, resp *http.Response) bool {
 	if req == nil || resp == nil {
 		return false

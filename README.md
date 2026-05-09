@@ -108,7 +108,7 @@ mitm:
       action: request-header
       old: 'User-Agent: .*'
       new: 'User-Agent: mihomo-mitm'
-    # rewrite response body (chunked or fixed-length, text-like Content-Type)
+    # rewrite response body (known Content-Length, text-like Content-Type)
     - url: '^https?://example\.com/score'
       action: response-body
       old: '"score":\d+'
