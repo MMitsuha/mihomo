@@ -114,7 +114,7 @@ func (Handler) HandleResponse(session *mitm.Session) *http.Response {
 		if !CanRewriteResponseBody(resp.ContentLength, resp.Header.Get("Content-Type")) {
 			return nil
 		}
-		body, err := mitm.ReadDecompressedBody(resp)
+		body, err := mitm.ReadDecompressedBody(resp, MaxRewriteBodySize)
 		_ = resp.Body.Close()
 		if err != nil {
 			return nil

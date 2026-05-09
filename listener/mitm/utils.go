@@ -67,28 +67,48 @@ func NewErrorResponse(req *http.Request, err error) *http.Response {
 	return res
 }
 
-// ReadDecompressedBody reads res.Body, transparently decoding gzip/deflate/br.
-// The caller owns closing res.Body. The returned bytes are the decoded payload.
-func ReadDecompressedBody(res *http.Response) ([]byte, error) {
-	var reader io.Reader = res.Body
+// ErrBodyTooLarge is returned by ReadDecompressedBody when the body exceeds
+// the supplied size cap. Callers should treat this as a non-rewritable body.
+var ErrBodyTooLarge = errors.New("mitm: body exceeds max rewrite size")
 
+// ReadDecompressedBody reads res.Body, transparently decoding gzip/deflate/br.
+// At most max bytes of decoded output are read; anything larger returns
+// ErrBodyTooLarge so a chunked / streamed response can't OOM the proxy. The
+// caller owns closing res.Body.
+func ReadDecompressedBody(res *http.Response, max int64) ([]byte, error) {
+	if max <= 0 {
+		return nil, ErrBodyTooLarge
+	}
+	// Cap input bytes too — for non-compressed bodies this directly bounds
+	// memory; for compressed bodies it bounds the read but the decoded
+	// output is checked separately below.
+	src := io.LimitReader(res.Body, max+1)
+
+	var reader io.Reader = src
 	switch res.Header.Get("Content-Encoding") {
 	case "gzip":
-		gz, err := gzip.NewReader(res.Body)
+		gz, err := gzip.NewReader(src)
 		if err != nil {
 			return nil, err
 		}
 		defer gz.Close()
 		reader = gz
 	case "deflate":
-		fr := flate.NewReader(res.Body)
+		fr := flate.NewReader(src)
 		defer fr.Close()
 		reader = fr
 	case "br":
-		reader = brotli.NewReader(res.Body)
+		reader = brotli.NewReader(src)
 	}
 
-	return io.ReadAll(reader)
+	data, err := io.ReadAll(io.LimitReader(reader, max+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > max {
+		return nil, ErrBodyTooLarge
+	}
+	return data, nil
 }
 
 func isWebsocketRequest(req *http.Request) bool {
