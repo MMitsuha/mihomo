@@ -72,6 +72,12 @@ func (Handler) HandleRequest(session *mitm.Session) (*http.Request, *http.Respon
 			return nil, nil
 		}
 		req.Header = newHdr
+		// http.Request.Write emits the Host line from req.Host, not from
+		// req.Header["Host"]. Propagate so user-authored Host rewrites
+		// actually take effect upstream.
+		if h := newHdr.Get("Host"); h != "" {
+			req.Host = h
+		}
 		return req, nil
 	case C.MitmRequestBody:
 		if !CanRewriteRequestBody(req.ContentLength, req.Header.Get("Content-Type")) {
