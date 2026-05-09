@@ -6,6 +6,7 @@ import (
 	"github.com/metacubex/mihomo/adapter/inbound"
 	"github.com/metacubex/mihomo/common/cert"
 	C "github.com/metacubex/mihomo/constant"
+	"github.com/metacubex/mihomo/log"
 )
 
 // Dispatcher decides whether a connection passing through the tunnel should be
@@ -63,6 +64,7 @@ func (d *Dispatcher) Dispatch(conn net.Conn, metadata *C.Metadata) bool {
 	if _, ok := d.ports[metadata.DstPort]; !ok {
 		return false
 	}
+	log.Debugln("[MITM] hijack %s -> %s", metadata.SourceAddress(), metadata.RemoteAddress())
 	go HandleConnTransparent(conn, metadata, d.opt, d.tunnel, d.additions...)
 	return true
 }

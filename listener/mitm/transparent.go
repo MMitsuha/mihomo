@@ -11,6 +11,7 @@ import (
 	"github.com/metacubex/mihomo/adapter/inbound"
 	N "github.com/metacubex/mihomo/common/net"
 	C "github.com/metacubex/mihomo/constant"
+	"github.com/metacubex/mihomo/log"
 	"github.com/metacubex/mihomo/transport/socks5"
 
 	"github.com/metacubex/http"
@@ -31,37 +32,48 @@ func HandleConnTransparent(c net.Conn, target *C.Metadata, opt *Option, tunnel C
 		return
 	}
 
-	conn := N.NewBufferedConn(c)
-
-	if err := conn.SetReadDeadline(time.Now().Add(peekDeadline)); err != nil {
-		return
-	}
-	first, err := conn.Peek(1)
-	_ = conn.SetReadDeadline(time.Time{})
-	if err != nil && !errors.Is(err, bufio.ErrBufferFull) && !os.IsTimeout(err) {
-		return
-	}
-	if len(first) == 0 {
-		return
-	}
-
+	dst := target.RemoteAddress()
 	host := target.Host
 	if host == "" && target.DstIP.IsValid() {
 		host = target.DstIP.String()
 	}
 
+	conn := N.NewBufferedConn(c)
+
+	if err := conn.SetReadDeadline(time.Now().Add(peekDeadline)); err != nil {
+		log.Debugln("[MITM] %s: set peek deadline: %s", dst, err.Error())
+		return
+	}
+	first, err := conn.Peek(1)
+	_ = conn.SetReadDeadline(time.Time{})
+	if err != nil && !errors.Is(err, bufio.ErrBufferFull) && !os.IsTimeout(err) {
+		log.Debugln("[MITM] %s: peek first byte: %s", dst, err.Error())
+		return
+	}
+	if len(first) == 0 {
+		log.Debugln("[MITM] %s: empty stream", dst)
+		return
+	}
+
 	var tlsState *tls.ConnectionState
 	if first[0] == 0x16 {
-		tlsConn := tls.Server(conn, opt.CertConfig.NewTLSConfigForHost(host))
+		tlsCfg := opt.CertConfig.NewTLSConfigForHost(host)
+		tlsCfg.GetCertificate = wrapCertLogger(tlsCfg.GetCertificate, dst)
+		tlsConn := tls.Server(conn, tlsCfg)
 		hsCtx, cancel := context.WithTimeout(context.Background(), C.DefaultTLSTimeout)
 		err := tlsConn.HandshakeContext(hsCtx)
 		cancel()
 		if err != nil {
+			// The browser commonly aborts the handshake when it doesn't trust
+			// our CA. Surface that explicitly so the symptom isn't a silent
+			// "connection reset" with no log line.
+			log.Warnln("[MITM] %s: TLS handshake from client failed: %s (is mitm.crt installed as a trusted root?)", dst, err.Error())
 			return
 		}
 		state := tlsConn.ConnectionState()
 		tlsState = &state
 		conn = N.NewBufferedConn(tlsConn)
+		log.Debugln("[MITM] %s: TLS terminated, SNI=%q", dst, state.ServerName)
 	} else {
 		// peek a few more bytes to confirm HTTP method; otherwise fall back
 		// to a raw passthrough (some 80/443 traffic isn't HTTP/HTTPS at all).
@@ -71,15 +83,29 @@ func HandleConnTransparent(c net.Conn, target *C.Metadata, opt *Option, tunnel C
 		buf, perr := conn.Peek(7)
 		_ = conn.SetReadDeadline(time.Time{})
 		if perr != nil && !errors.Is(perr, bufio.ErrBufferFull) && !os.IsTimeout(perr) {
+			log.Debugln("[MITM] %s: peek HTTP method: %s", dst, perr.Error())
 			return
 		}
 		if !isHTTPTraffic(buf) {
+			log.Debugln("[MITM] %s: not HTTP, passing through", dst)
 			passthrough(conn, target, tunnel, additions)
 			return
 		}
 	}
 
 	runTransparentLoop(conn, c, target, opt, tlsState, tunnel, additions)
+}
+
+// wrapCertLogger reports the SNI/host actually used for cert minting and any
+// failure that prevents the leaf cert from being issued.
+func wrapCertLogger(orig func(*tls.ClientHelloInfo) (*tls.Certificate, error), dst string) func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
+	return func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
+		cert, err := orig(hello)
+		if err != nil {
+			log.Warnln("[MITM] %s: cert mint failed for SNI=%q: %s", dst, hello.ServerName, err.Error())
+		}
+		return cert, err
+	}
 }
 
 // passthrough forwards a non-HTTP/non-TLS stream to the metadata destination
@@ -109,12 +135,16 @@ func runTransparentLoop(conn *N.BufferedConn, srcConn net.Conn, target *C.Metada
 
 	hostPort := target.RemoteAddress()
 
+	dst := target.RemoteAddress()
 	for {
 		if err := conn.SetReadDeadline(time.Now().Add(readDeadline)); err != nil {
 			return
 		}
 		req, err := readRequest(conn.Reader())
 		if err != nil {
+			if !errors.Is(err, net.ErrClosed) && !os.IsTimeout(err) && !errors.Is(err, http.ErrServerClosed) {
+				log.Debugln("[MITM] %s: read request: %s", dst, err.Error())
+			}
 			return
 		}
 		req.RemoteAddr = srcConn.RemoteAddr().String()
