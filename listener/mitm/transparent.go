@@ -236,8 +236,12 @@ func runTransparentLoop(conn *N.BufferedConn, srcConn net.Conn, target *C.Metada
 		}
 		if newResp != nil {
 			session.SetResponse(newResp)
-			if err := writeResponse(session, false); err != nil {
+			keepAlive := canKeepAlive(req, newResp)
+			if err := writeResponse(session, keepAlive); err != nil {
 				opt.Handler.HandleError(session, err)
+				return
+			}
+			if !keepAlive {
 				return
 			}
 			continue
@@ -251,7 +255,7 @@ func runTransparentLoop(conn *N.BufferedConn, srcConn net.Conn, target *C.Metada
 			if err != nil {
 				opt.Handler.HandleError(session, err)
 				session.SetResponse(session.NewErrorResponse(err))
-				_ = writeResponse(session, true)
+				_ = writeResponse(session, false)
 				return
 			}
 		}
@@ -280,8 +284,12 @@ func runTransparentLoop(conn *N.BufferedConn, srcConn net.Conn, target *C.Metada
 			session.SetResponse(rewritten)
 		}
 
-		if err := writeResponse(session, true); err != nil {
+		keepAlive := canKeepAlive(req, session.Response())
+		if err := writeResponse(session, keepAlive); err != nil {
 			opt.Handler.HandleError(session, err)
+			return
+		}
+		if !keepAlive {
 			return
 		}
 	}

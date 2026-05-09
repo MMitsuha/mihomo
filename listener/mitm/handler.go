@@ -78,7 +78,9 @@ func removeHopByHopHeaders(h http.Header) {
 }
 
 // writeResponse writes session.Response back to the client, normalising
-// hop-by-hop headers and (optionally) keep-alive markers.
+// hop-by-hop headers and (optionally) keep-alive markers. When keepAlive
+// is false the response is forced into close-delimited form so a body of
+// unknown length still terminates cleanly.
 func writeResponse(session *Session, keepAlive bool) error {
 	resp := session.Response()
 	if resp == nil {
@@ -88,8 +90,30 @@ func writeResponse(session *Session, keepAlive bool) error {
 	if keepAlive {
 		resp.Header.Set("Connection", "keep-alive")
 		resp.Header.Set("Keep-Alive", "timeout=60")
+	} else {
+		resp.Header.Set("Connection", "close")
+		resp.Header.Del("Keep-Alive")
+		resp.Close = true
 	}
 	return session.writeResponse()
+}
+
+// canKeepAlive reports whether the client connection can be reused after
+// writing this exchange. Either side signaling close (req.Close, resp.Close,
+// HTTP/1.0 without explicit Keep-Alive negotiation) or a body whose length
+// is delimited by EOF requires the connection to close. resp.Close is set by
+// http.ReadResponse for all of those upstream cases.
+func canKeepAlive(req *http.Request, resp *http.Response) bool {
+	if req == nil || resp == nil {
+		return false
+	}
+	if req.Close || resp.Close {
+		return false
+	}
+	if req.ProtoMajor < 1 || (req.ProtoMajor == 1 && req.ProtoMinor < 1) {
+		return false
+	}
+	return true
 }
 
 // relayWebsocket bridges a WebSocket upgrade exchange between client and upstream.
