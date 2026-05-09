@@ -139,3 +139,50 @@ func TestRuleReplaceSub(t *testing.T) {
 		t.Errorf("ReplaceSubPayload = %q, want %q", got, want)
 	}
 }
+
+// TestRuleReplaceSubOverlap covers the case where the replacement contains
+// the matched text. Earlier implementations used strings.Replace against the
+// already-mutated string and would re-match their own output; with
+// `foo` -> `foo-bar` on `foo foo` that produced `foo-bar-bar foo` instead
+// of `foo-bar foo-bar`.
+func TestRuleReplaceSubOverlap(t *testing.T) {
+	old := `foo`
+	raw := RawRule{
+		URL:    `.*`,
+		Action: C.MitmResponseBody,
+		Old:    &old,
+		New:    `foo-bar`,
+	}
+	rule, err := ParseRule(raw)
+	if err != nil {
+		t.Fatalf("ParseRule: %v", err)
+	}
+	got := rule.ReplaceSubPayload(`foo foo`)
+	want := `foo-bar foo-bar`
+	if got != want {
+		t.Errorf("ReplaceSubPayload = %q, want %q", got, want)
+	}
+}
+
+// TestRuleReplaceSubMultibyte verifies offset handling when the input contains
+// runes wider than one byte. regexp2 reports match offsets in runes, so the
+// rewriter must slice on the rune view (not bytes) to land replacements in
+// the right place.
+func TestRuleReplaceSubMultibyte(t *testing.T) {
+	old := `score`
+	raw := RawRule{
+		URL:    `.*`,
+		Action: C.MitmResponseBody,
+		Old:    &old,
+		New:    `值`,
+	}
+	rule, err := ParseRule(raw)
+	if err != nil {
+		t.Fatalf("ParseRule: %v", err)
+	}
+	got := rule.ReplaceSubPayload(`café score 你好 score end`)
+	want := `café 值 你好 值 end`
+	if got != want {
+		t.Errorf("ReplaceSubPayload = %q, want %q", got, want)
+	}
+}

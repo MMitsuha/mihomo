@@ -42,23 +42,39 @@ func (r *Rule) ReplaceURLPayload(matches []string) string {
 
 // ReplaceSubPayload applies the body/header pattern substitution. It iterates
 // every match against ruleRegx and replaces it with rulePayload, after
-// $1..$N back-reference expansion.
+// $1..$N back-reference expansion. Output is built positionally from match
+// offsets so a replacement that contains the matched text can't be re-matched
+// by later iterations (e.g. old `foo`, new `foo-bar`, input `foo foo`).
 func (r *Rule) ReplaceSubPayload(input string) string {
 	if r.ruleRegx == nil {
 		return input
 	}
 
+	// regexp2 reports match offsets in runes, not bytes. Slice the rune view
+	// of input to honour those offsets exactly.
+	runes := []rune(input)
+	var b strings.Builder
+	b.Grow(len(input))
+
+	pos := 0
 	match, err := r.ruleRegx.FindStringMatch(input)
 	for err == nil && match != nil {
+		if match.Index > pos {
+			b.WriteString(string(runes[pos:match.Index]))
+		}
 		groups := match.Groups()
 		payload := r.rulePayload
 		for i := 1; i < len(groups); i++ {
 			payload = strings.Replace(payload, "$"+strconv.Itoa(i), groups[i].String(), 1)
 		}
-		input = strings.Replace(input, match.String(), payload, 1)
+		b.WriteString(payload)
+		pos = match.Index + match.Length
 		match, err = r.ruleRegx.FindNextMatch(match)
 	}
-	return input
+	if pos < len(runes) {
+		b.WriteString(string(runes[pos:]))
+	}
+	return b.String()
 }
 
 // NewRule constructs a rewrite rule.
