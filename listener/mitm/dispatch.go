@@ -54,6 +54,12 @@ func (d *Dispatcher) Dispatch(conn net.Conn, metadata *C.Metadata) bool {
 	if metadata.NetWork != C.TCP {
 		return false
 	}
+	// Skip mihomo's own outbound traffic (rule-provider fetches, geo updates,
+	// the dashboard zip, DoH queries, etc.). These verify against the system
+	// trust store, not the MITM CA, so intercepting them would always fail.
+	if metadata.Type == C.INNER {
+		return false
+	}
 	if _, ok := d.ports[metadata.DstPort]; !ok {
 		return false
 	}
