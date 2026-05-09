@@ -485,6 +485,12 @@ func handleTCPConn(connCtx C.ConnContext) {
 		return
 	}
 
+	// MITM transparent intercept runs before the close-defer so the
+	// interceptor can keep the conn alive past this function returning.
+	if tryMitmIntercept(connCtx.Conn(), connCtx.Metadata()) {
+		return
+	}
+
 	defer func(conn net.Conn) {
 		_ = conn.Close()
 	}(connCtx.Conn())

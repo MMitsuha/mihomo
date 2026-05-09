@@ -32,6 +32,7 @@ func dialUpstream(ctx context.Context, request *http.Request, srcConn net.Conn, 
 	}
 
 	left, right := N.Pipe()
+	additions = append(additions, inbound.WithIntercepted(true))
 	conn, metadata := inbound.NewHTTP(dstAddr, srcConn, right, additions...)
 	go tunnel.HandleTCPConn(conn, metadata)
 

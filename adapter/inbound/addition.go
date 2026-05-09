@@ -70,4 +70,10 @@ func WithDSCP(dscp uint8) Addition {
 	}
 }
 
+func WithIntercepted(intercepted bool) Addition {
+	return func(metadata *C.Metadata) {
+		metadata.Intercepted = intercepted
+	}
+}
+
 func Placeholder(metadata *C.Metadata) {}

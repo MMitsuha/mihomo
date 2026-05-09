@@ -11,6 +11,10 @@ mixed-port: 10801 # HTTP(S) 和 SOCKS 代理混合端口
 # 系统/浏览器信任的根证书。访问 http://mitm.mihomo/cert.crt 可以从 MITM 端口
 # 直接下载 CA 证书。
 # mitm-port: 7894
+# mitm-hosts: # 这些 host 的 80/443 流量从任意入站(TUN/redir/tproxy/mixed/...)
+#   - "+.example.com" #     都会被劫持到 MITM 流水线，无需客户端显式使用 MITM 代理。
+#   - "api.foo.com"
+# mitm-auto-hijack: false # 设为 true 则不限制 host，所有 80/443 流量均劫持。
 # mitm-rules:
 #   # 拦截广告请求，返回 404
 #   - url: '^https?://ads\.example\.com/.*'

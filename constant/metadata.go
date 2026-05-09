@@ -206,6 +206,10 @@ type Metadata struct {
 	RawDstAddr net.Addr `json:"-"`
 	// Only domain rule
 	SniffHost string `json:"sniffHost"`
+	// Intercepted is set on metadata that has already been processed by an
+	// in-tunnel interceptor (MITM transparent dispatcher). Stops re-entry
+	// loops when an interceptor dials its own upstream through the tunnel.
+	Intercepted bool `json:"-"`
 }
 
 func (m *Metadata) RemoteAddress() string {

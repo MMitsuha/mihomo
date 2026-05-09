@@ -74,7 +74,7 @@ func (Handler) HandleRequest(session *mitm.Session) (*http.Request, *http.Respon
 		req.Header = newHdr
 		return req, nil
 	case C.MitmRequestBody:
-		if !CanRewriteBody(req.ContentLength, req.Header.Get("Content-Type")) {
+		if !CanRewriteRequestBody(req.ContentLength, req.Header.Get("Content-Type")) {
 			return nil, nil
 		}
 		buf := make([]byte, req.ContentLength)
@@ -111,7 +111,7 @@ func (Handler) HandleResponse(session *mitm.Session) *http.Response {
 		resp.Header.Set("Content-Length", strconv.FormatInt(resp.ContentLength, 10))
 		return resp
 	case C.MitmResponseBody:
-		if !CanRewriteBody(resp.ContentLength, resp.Header.Get("Content-Type")) {
+		if !CanRewriteResponseBody(resp.ContentLength, resp.Header.Get("Content-Type")) {
 			return nil
 		}
 		body, err := mitm.ReadDecompressedBody(resp)
@@ -122,6 +122,7 @@ func (Handler) HandleResponse(session *mitm.Session) *http.Response {
 		newBody := []byte(rule.ReplaceSubPayload(string(body)))
 		resp.Body = io.NopCloser(bytes.NewReader(newBody))
 		resp.Header.Del("Content-Encoding")
+		resp.Header.Del("Transfer-Encoding") // we now know the full size
 		resp.ContentLength = int64(len(newBody))
 		resp.Header.Set("Content-Length", strconv.FormatInt(resp.ContentLength, 10))
 		return resp

@@ -77,6 +77,8 @@ type Inbound struct {
 	TProxyPort        int            `json:"tproxy-port"`
 	MixedPort         int            `json:"mixed-port"`
 	MitmPort          int            `json:"mitm-port"`
+	MitmHosts         []string       `json:"mitm-hosts"`
+	MitmAutoHijack    bool           `json:"mitm-auto-hijack"`
 	Tun               LC.Tun         `json:"tun"`
 	TuicServer        LC.TuicServer  `json:"tuic-server"`
 	ShadowSocksConfig string         `json:"ss-config"`
@@ -399,6 +401,8 @@ type RawConfig struct {
 	TProxyPort              int                     `yaml:"tproxy-port" json:"tproxy-port"`
 	MixedPort               int                     `yaml:"mixed-port" json:"mixed-port"`
 	MitmPort                int                     `yaml:"mitm-port" json:"mitm-port"`
+	MitmHosts               []string                `yaml:"mitm-hosts" json:"mitm-hosts"`
+	MitmAutoHijack          bool                    `yaml:"mitm-auto-hijack" json:"mitm-auto-hijack"`
 	MitmRules               []rewrite.RawRule       `yaml:"mitm-rules" json:"mitm-rules"`
 	ShadowSocksConfig       string                  `yaml:"ss-config" json:"ss-config"`
 	VmessConfig             string                  `yaml:"vmess-config" json:"vmess-config"`
@@ -757,6 +761,8 @@ func parseGeneral(cfg *RawConfig) (*General, error) {
 			TProxyPort:        cfg.TProxyPort,
 			MixedPort:         cfg.MixedPort,
 			MitmPort:          cfg.MitmPort,
+			MitmHosts:         cfg.MitmHosts,
+			MitmAutoHijack:    cfg.MitmAutoHijack,
 			ShadowSocksConfig: cfg.ShadowSocksConfig,
 			VmessConfig:       cfg.VmessConfig,
 			AllowLan:          cfg.AllowLan,

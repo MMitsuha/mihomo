@@ -90,8 +90,19 @@ traffic using a CA generated on first boot. The CA cert and key are written to
 a trusted root on the client device, or download it from the proxy itself at
 `http://mitm.mihomo/cert.crt`.
 
+In addition to clients that point at `mitm-port` directly, traffic from any
+inbound (TUN, redir, tproxy, mixed, ...) destined for ports 80/443 can be
+hijacked into the same rewrite pipeline. Use `mitm-hosts` to whitelist host
+patterns, or `mitm-auto-hijack: true` to intercept every host:
+
 ```yaml
 mitm-port: 7894
+# Hijack only these hosts when seen on 80/443 from any inbound:
+mitm-hosts:
+  - "+.example.com"
+  - "api.foo.com"
+# Or hijack all 80/443 traffic from every inbound:
+# mitm-auto-hijack: true
 mitm-rules:
   # block ad requests with 404
   - url: '^https?://ads\.example\.com/.*'

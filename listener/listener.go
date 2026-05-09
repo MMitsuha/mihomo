@@ -23,6 +23,7 @@ import (
 	"github.com/metacubex/mihomo/listener/tuic"
 	LT "github.com/metacubex/mihomo/listener/tunnel"
 	"github.com/metacubex/mihomo/log"
+	"github.com/metacubex/mihomo/tunnel"
 
 	"github.com/samber/lo"
 )
@@ -399,9 +400,18 @@ func ReCreateTuic(config LC.TuicServer, tunnel C.Tunnel) {
 	return
 }
 
-// ReCreateMitm starts (or restarts) the MITM listener on the given port.
-// handler may be nil for a transparent proxy with no rewrite rules.
-func ReCreateMitm(port int, tunnel C.Tunnel, handler mitm.Handler) {
+// MitmConfig configures the MITM listener and the in-tunnel transparent
+// dispatcher together. A zero/empty struct disables both.
+type MitmConfig struct {
+	Port       int
+	Hosts      []string // host patterns (DomainTrie syntax) to MITM through any inbound
+	AutoHijack bool     // if true, MITM every connection to ports 80/443 — not just listed hosts
+	Handler    mitm.Handler
+}
+
+// ReCreateMitm starts (or restarts) the MITM listener and configures the
+// in-tunnel transparent dispatcher according to cfg.
+func ReCreateMitm(cfg MitmConfig, tunnelImpl C.Tunnel) {
 	mitmMux.Lock()
 	defer mitmMux.Unlock()
 
@@ -412,17 +422,20 @@ func ReCreateMitm(port int, tunnel C.Tunnel, handler mitm.Handler) {
 		}
 	}()
 
-	addr := genAddr(bindAddress, port, allowLan)
+	addr := genAddr(bindAddress, cfg.Port, allowLan)
+
+	dedicatedWanted := !portIsZero(addr)
+	transparentWanted := cfg.AutoHijack || len(cfg.Hosts) > 0
 
 	if mitmListener != nil {
-		if mitmListener.RawAddress() == addr {
-			return
+		if mitmListener.RawAddress() != addr {
+			_ = mitmListener.Close()
+			mitmListener = nil
 		}
-		_ = mitmListener.Close()
-		mitmListener = nil
 	}
 
-	if portIsZero(addr) {
+	if !dedicatedWanted && !transparentWanted {
+		tunnel.SetMitmIntercept(nil)
 		return
 	}
 
@@ -433,12 +446,30 @@ func ReCreateMitm(port int, tunnel C.Tunnel, handler mitm.Handler) {
 		}
 	}
 
-	mitmListener, err = mitm.New(addr, mitmCertConfig, handler, tunnel)
-	if err != nil {
-		return
+	if dedicatedWanted && mitmListener == nil {
+		mitmListener, err = mitm.New(addr, mitmCertConfig, cfg.Handler, tunnelImpl)
+		if err != nil {
+			return
+		}
+		log.Infoln("MITM proxy listening at: %s", mitmListener.Address())
 	}
 
-	log.Infoln("MITM proxy listening at: %s", mitmListener.Address())
+	if transparentWanted {
+		hostsTrie, terr := mitm.BuildHostsTrie(cfg.Hosts)
+		if terr != nil {
+			err = terr
+			return
+		}
+		dispatcher := mitm.NewDispatcher(mitmCertConfig, hostsTrie, []uint16{80, 443}, tunnelImpl, cfg.Handler)
+		tunnel.SetMitmIntercept(dispatcher.Dispatch)
+		mode := "auto-hijack"
+		if hostsTrie != nil {
+			mode = fmt.Sprintf("%d host pattern(s)", len(cfg.Hosts))
+		}
+		log.Infoln("MITM transparent dispatcher active (%s)", mode)
+	} else {
+		tunnel.SetMitmIntercept(nil)
+	}
 }
 
 // loadOrCreateMitmCert loads the persistent MITM CA from disk, generating a new
