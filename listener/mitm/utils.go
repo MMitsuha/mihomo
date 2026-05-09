@@ -102,11 +102,13 @@ func isHTTPTraffic(buf []byte) bool {
 	if len(buf) == 0 {
 		return false
 	}
-	idx := bytes.IndexByte(buf, ' ')
-	if idx <= 0 {
-		return false
+	if idx := bytes.IndexByte(buf, ' '); idx > 0 {
+		return validMethod(string(buf[:idx]))
 	}
-	return validMethod(string(buf[:idx]))
+	// No space yet — happens when the peek window is exactly the length
+	// of a 7-char method like "OPTIONS" or "CONNECT". Accept the buffer
+	// itself as a candidate method so the peek-7 fast path still works.
+	return validMethod(string(buf))
 }
 
 // validMethod checks whether method is a recognised HTTP request method.
