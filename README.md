@@ -28,6 +28,8 @@
   based off latency
 - Remote providers, allowing users to get node lists remotely instead of hard-coding in config
 - Netfilter TCP redirecting. Deploy Mihomo on your Internet gateway with `iptables`.
+- MITM proxy with on-the-fly TLS interception and a regex-based rewrite engine
+  (reject / redirect / header / body rewrite for HTTP and HTTPS).
 - Comprehensive HTTP RESTful API controller
 
 ## Dashboard
@@ -79,6 +81,41 @@ iptables:
   enable: true # default is false
   inbound-interface: eth0 # detect the inbound interface, default is 'lo'
 ```
+
+### MITM proxy
+
+`mitm-port` enables an HTTP CONNECT-style proxy that decrypts intercepted TLS
+traffic using a CA generated on first boot. The CA cert and key are written to
+`mitm.crt` / `mitm.key` under the mihomo home directory. Install `mitm.crt` as
+a trusted root on the client device, or download it from the proxy itself at
+`http://mitm.mihomo/cert.crt`.
+
+```yaml
+mitm-port: 7894
+mitm-rules:
+  # block ad requests with 404
+  - url: '^https?://ads\.example\.com/.*'
+    action: reject
+  # rewrite URL with capture-group back-reference
+  - url: '^https?://api\.example\.com/v1/(.*)'
+    action: '302'
+    new: 'https://api.example.com/v2/$1'
+  # rewrite request header
+  - url: '^https?://example\.com/.*'
+    action: request-header
+    old: 'User-Agent: .*'
+    new: 'User-Agent: mihomo-mitm'
+  # rewrite response body
+  - url: '^https?://example\.com/score'
+    action: response-body
+    old: '"score":\d+'
+    new: '"score":999'
+```
+
+Available `action` values: `reject`, `reject-200`, `reject-img`, `reject-dict`,
+`reject-array`, `302`, `307`, `request-header`, `request-body`,
+`response-header`, `response-body`. Body-rewrite rules only apply to
+text-like content types (`text/*`, JSON, XML, form-urlencoded).
 
 ## Debugging
 

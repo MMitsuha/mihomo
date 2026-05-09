@@ -6,6 +6,30 @@ mixed-port: 10801 # HTTP(S) 和 SOCKS 代理混合端口
 # Transparent proxy server port for Linux (TProxy TCP and TProxy UDP)
 # tproxy-port: 7893
 
+# MITM(中间人)代理端口，用于解密并改写 HTTP/HTTPS 流量
+# 首次启动会在 home-dir 下生成 mitm.crt 与 mitm.key，需要将 mitm.crt 安装为
+# 系统/浏览器信任的根证书。访问 http://mitm.mihomo/cert.crt 可以从 MITM 端口
+# 直接下载 CA 证书。
+# mitm-port: 7894
+# mitm-rules:
+#   # 拦截广告请求，返回 404
+#   - url: '^https?://ads\.example\.com/.*'
+#     action: reject
+#   # 老 API 重定向到新 API（$1 引用 URL 正则的捕获组）
+#   - url: '^https?://api\.example\.com/v1/(.*)'
+#     action: '302'
+#     new: 'https://api.example.com/v2/$1'
+#   # 改写请求头中的 User-Agent
+#   - url: '^https?://example\.com/.*'
+#     action: request-header
+#     old: 'User-Agent: .*'
+#     new: 'User-Agent: mihomo-mitm'
+#   # 改写响应体中的某段 JSON 字段
+#   - url: '^https?://example\.com/score'
+#     action: response-body
+#     old: '"score":\d+'
+#     new: '"score":999'
+
 allow-lan: true # 允许局域网连接
 bind-address: "*" # 绑定 IP 地址，仅作用于 allow-lan 为 true，'*'表示所有地址
 authentication: # http,socks 入口的验证用户名，密码

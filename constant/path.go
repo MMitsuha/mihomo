@@ -212,6 +212,16 @@ func (p *path) GetAssetLocation(file string) string {
 	return P.Join(p.homeDir, file)
 }
 
+// MITMCert returns the path of the MITM CA certificate file.
+func (p *path) MITMCert() string {
+	return P.Join(p.homeDir, "mitm.crt")
+}
+
+// MITMKey returns the path of the MITM CA private key file.
+func (p *path) MITMKey() string {
+	return P.Join(p.homeDir, "mitm.key")
+}
+
 func (p *path) GetExecutableFullPath() string {
 	exePath, err := os.Executable()
 	if err != nil {

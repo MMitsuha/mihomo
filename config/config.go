@@ -33,6 +33,7 @@ import (
 	"github.com/metacubex/mihomo/listener"
 	LC "github.com/metacubex/mihomo/listener/config"
 	"github.com/metacubex/mihomo/log"
+	"github.com/metacubex/mihomo/rewrite"
 	R "github.com/metacubex/mihomo/rules"
 	RC "github.com/metacubex/mihomo/rules/common"
 	RP "github.com/metacubex/mihomo/rules/provider"
@@ -75,6 +76,7 @@ type Inbound struct {
 	RedirPort         int            `json:"redir-port"`
 	TProxyPort        int            `json:"tproxy-port"`
 	MixedPort         int            `json:"mixed-port"`
+	MitmPort          int            `json:"mitm-port"`
 	Tun               LC.Tun         `json:"tun"`
 	TuicServer        LC.TuicServer  `json:"tuic-server"`
 	ShadowSocksConfig string         `json:"ss-config"`
@@ -199,6 +201,7 @@ type Config struct {
 	Profile       *Profile
 	Rules         []C.Rule
 	SubRules      map[string][]C.Rule
+	MitmRules     *rewrite.Rules
 	Users         []auth.AuthUser
 	Proxies       map[string]C.Proxy
 	Listeners     map[string]C.InboundListener
@@ -395,6 +398,8 @@ type RawConfig struct {
 	RedirPort               int                     `yaml:"redir-port" json:"redir-port"`
 	TProxyPort              int                     `yaml:"tproxy-port" json:"tproxy-port"`
 	MixedPort               int                     `yaml:"mixed-port" json:"mixed-port"`
+	MitmPort                int                     `yaml:"mitm-port" json:"mitm-port"`
+	MitmRules               []rewrite.RawRule       `yaml:"mitm-rules" json:"mitm-rules"`
 	ShadowSocksConfig       string                  `yaml:"ss-config" json:"ss-config"`
 	VmessConfig             string                  `yaml:"vmess-config" json:"vmess-config"`
 	InboundTfo              bool                    `yaml:"inbound-tfo" json:"inbound-tfo"`
@@ -729,6 +734,11 @@ func ParseRawConfig(rawCfg *RawConfig) (*Config, error) {
 		return nil, err
 	}
 
+	config.MitmRules, err = rewrite.ParseRules(rawCfg.MitmRules)
+	if err != nil {
+		return nil, fmt.Errorf("parse mitm rules: %w", err)
+	}
+
 	elapsedTime := time.Since(startTime) / time.Millisecond                     // duration in ms
 	log.Infoln("Initial configuration complete, total time: %dms", elapsedTime) //Segment finished in xxm
 
@@ -746,6 +756,7 @@ func parseGeneral(cfg *RawConfig) (*General, error) {
 			RedirPort:         cfg.RedirPort,
 			TProxyPort:        cfg.TProxyPort,
 			MixedPort:         cfg.MixedPort,
+			MitmPort:          cfg.MitmPort,
 			ShadowSocksConfig: cfg.ShadowSocksConfig,
 			VmessConfig:       cfg.VmessConfig,
 			AllowLan:          cfg.AllowLan,

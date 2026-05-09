@@ -7,9 +7,11 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/metacubex/mihomo/common/cert"
 	C "github.com/metacubex/mihomo/constant"
 	LC "github.com/metacubex/mihomo/listener/config"
 	"github.com/metacubex/mihomo/listener/http"
+	"github.com/metacubex/mihomo/listener/mitm"
 	"github.com/metacubex/mihomo/listener/mixed"
 	"github.com/metacubex/mihomo/listener/redir"
 	embedSS "github.com/metacubex/mihomo/listener/shadowsocks"
@@ -38,6 +40,8 @@ var (
 	tproxyUDPListener   *tproxy.UDPListener
 	mixedListener       *mixed.Listener
 	mixedUDPLister      *socks.UDPListener
+	mitmListener        *mitm.Listener
+	mitmCertConfig      *cert.Config
 	tunnelTCPListeners  = map[string]*LT.Listener{}
 	tunnelUDPListeners  = map[string]*LT.PacketConn{}
 	inboundListeners    = map[string]C.InboundListener{}
@@ -52,6 +56,7 @@ var (
 	redirMux   sync.Mutex
 	tproxyMux  sync.Mutex
 	mixedMux   sync.Mutex
+	mitmMux    sync.Mutex
 	tunnelMux  sync.Mutex
 	inboundMux sync.Mutex
 	tunMux     sync.Mutex
@@ -69,6 +74,7 @@ type Ports struct {
 	RedirPort         int    `json:"redir-port"`
 	TProxyPort        int    `json:"tproxy-port"`
 	MixedPort         int    `json:"mixed-port"`
+	MitmPort          int    `json:"mitm-port"`
 	ShadowSocksConfig string `json:"ss-config"`
 	VmessConfig       string `json:"vmess-config"`
 }
@@ -393,6 +399,68 @@ func ReCreateTuic(config LC.TuicServer, tunnel C.Tunnel) {
 	return
 }
 
+// ReCreateMitm starts (or restarts) the MITM listener on the given port.
+// handler may be nil for a transparent proxy with no rewrite rules.
+func ReCreateMitm(port int, tunnel C.Tunnel, handler mitm.Handler) {
+	mitmMux.Lock()
+	defer mitmMux.Unlock()
+
+	var err error
+	defer func() {
+		if err != nil {
+			log.Errorln("Start MITM server error: %s", err.Error())
+		}
+	}()
+
+	addr := genAddr(bindAddress, port, allowLan)
+
+	if mitmListener != nil {
+		if mitmListener.RawAddress() == addr {
+			return
+		}
+		_ = mitmListener.Close()
+		mitmListener = nil
+	}
+
+	if portIsZero(addr) {
+		return
+	}
+
+	if mitmCertConfig == nil {
+		mitmCertConfig, err = loadOrCreateMitmCert()
+		if err != nil {
+			return
+		}
+	}
+
+	mitmListener, err = mitm.New(addr, mitmCertConfig, handler, tunnel)
+	if err != nil {
+		return
+	}
+
+	log.Infoln("MITM proxy listening at: %s", mitmListener.Address())
+}
+
+// loadOrCreateMitmCert loads the persistent MITM CA from disk, generating a new
+// one if either file is missing.
+func loadOrCreateMitmCert() (*cert.Config, error) {
+	certPath := C.Path.MITMCert()
+	keyPath := C.Path.MITMKey()
+
+	caCert, caKey, err := cert.LoadFromFiles(certPath, keyPath)
+	if err != nil {
+		log.Infoln("Generating MITM CA at %s", certPath)
+		if err := cert.GenerateAndSave(certPath, keyPath); err != nil {
+			return nil, err
+		}
+		caCert, caKey, err = cert.LoadFromFiles(certPath, keyPath)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return cert.NewConfig(caCert, caKey)
+}
+
 func ReCreateTProxy(port int, tunnel C.Tunnel) {
 	tproxyMux.Lock()
 	defer tproxyMux.Unlock()
@@ -683,6 +751,12 @@ func GetPorts() *Ports {
 		_, portStr, _ := net.SplitHostPort(mixedListener.Address())
 		port, _ := strconv.Atoi(portStr)
 		ports.MixedPort = port
+	}
+
+	if mitmListener != nil {
+		_, portStr, _ := net.SplitHostPort(mitmListener.Address())
+		port, _ := strconv.Atoi(portStr)
+		ports.MitmPort = port
 	}
 
 	if shadowSocksListener != nil {
