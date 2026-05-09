@@ -79,7 +79,11 @@ func (Handler) HandleRequest(session *mitm.Session) (*http.Request, *http.Respon
 		}
 		buf := make([]byte, req.ContentLength)
 		if _, err := io.ReadFull(req.Body, buf); err != nil {
-			return nil, nil
+			// io.ReadFull may have already consumed part of req.Body;
+			// forwarding the original request now would send a truncated
+			// payload upstream. Fail the request with a synthetic 502
+			// instead so the connection state stays consistent.
+			return nil, session.NewErrorResponse(err)
 		}
 		body := rule.ReplaceSubPayload(string(buf))
 		req.Body = io.NopCloser(strings.NewReader(body))
