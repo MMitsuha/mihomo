@@ -41,7 +41,10 @@ func dialUpstream(ctx context.Context, request *http.Request, srcConn net.Conn, 
 	}
 
 	tlsConn := tls.Client(left, &tls.Config{
-		ServerName:         request.TLS.ServerName,
+		ServerName: request.TLS.ServerName,
+		// Pin ALPN to http/1.1 so an h2-capable upstream can't negotiate
+		// HTTP/2 — our loop only speaks HTTP/1.1.
+		NextProtos:         []string{"http/1.1"},
 		InsecureSkipVerify: false,
 	})
 	hsCtx, cancel := context.WithTimeout(ctx, C.DefaultTLSTimeout)
