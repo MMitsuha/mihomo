@@ -125,6 +125,14 @@ func NewConfig(ca *x509.Certificate, caKey *ecdsa.PrivateKey) (*Config, error) {
 // CA returns the embedded CA certificate.
 func (c *Config) CA() *x509.Certificate { return c.ca }
 
+// CACertPEM returns the CA certificate as PEM bytes.
+func (c *Config) CACertPEM() []byte {
+	if c.ca == nil {
+		return nil
+	}
+	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: c.ca.Raw})
+}
+
 // SetValidity overrides the leaf certificate validity period.
 func (c *Config) SetValidity(d time.Duration) {
 	if d > 0 {

@@ -41,7 +41,6 @@ var (
 	tproxyUDPListener   *tproxy.UDPListener
 	mixedListener       *mixed.Listener
 	mixedUDPLister      *socks.UDPListener
-	mitmListener        *mitm.Listener
 	mitmCertConfig      *cert.Config
 	tunnelTCPListeners  = map[string]*LT.Listener{}
 	tunnelUDPListeners  = map[string]*LT.PacketConn{}
@@ -75,7 +74,6 @@ type Ports struct {
 	RedirPort         int    `json:"redir-port"`
 	TProxyPort        int    `json:"tproxy-port"`
 	MixedPort         int    `json:"mixed-port"`
-	MitmPort          int    `json:"mitm-port"`
 	ShadowSocksConfig string `json:"ss-config"`
 	VmessConfig       string `json:"vmess-config"`
 }
@@ -400,76 +398,50 @@ func ReCreateTuic(config LC.TuicServer, tunnel C.Tunnel) {
 	return
 }
 
-// MitmConfig configures the MITM listener and the in-tunnel transparent
-// dispatcher together. A zero/empty struct disables both.
+// MitmConfig configures the in-tunnel MITM dispatcher. With Enable=false,
+// any previously installed dispatcher is cleared.
 type MitmConfig struct {
-	Port       int
-	Hosts      []string // host patterns (DomainTrie syntax) to MITM through any inbound
-	AutoHijack bool     // if true, MITM every connection to ports 80/443 — not just listed hosts
-	Handler    mitm.Handler
+	Enable  bool
+	Ports   []uint16
+	Handler mitm.Handler
 }
 
-// ReCreateMitm starts (or restarts) the MITM listener and configures the
-// in-tunnel transparent dispatcher according to cfg.
-func ReCreateMitm(cfg MitmConfig, tunnelImpl C.Tunnel) {
+// ApplyMitm installs (or removes) the in-tunnel MITM dispatcher. MITM is
+// transparent — there is no dedicated MITM listener; whatever traffic any
+// inbound dispatches to the tunnel on a configured port gets intercepted.
+func ApplyMitm(cfg MitmConfig, tunnelImpl C.Tunnel) {
 	mitmMux.Lock()
 	defer mitmMux.Unlock()
 
-	var err error
-	defer func() {
-		if err != nil {
-			log.Errorln("Start MITM server error: %s", err.Error())
-		}
-	}()
-
-	addr := genAddr(bindAddress, cfg.Port, allowLan)
-
-	dedicatedWanted := !portIsZero(addr)
-	transparentWanted := cfg.AutoHijack || len(cfg.Hosts) > 0
-
-	if mitmListener != nil {
-		if mitmListener.RawAddress() != addr {
-			_ = mitmListener.Close()
-			mitmListener = nil
-		}
-	}
-
-	if !dedicatedWanted && !transparentWanted {
+	if !cfg.Enable || len(cfg.Ports) == 0 {
 		tunnel.SetMitmIntercept(nil)
 		return
 	}
 
 	if mitmCertConfig == nil {
-		mitmCertConfig, err = loadOrCreateMitmCert()
+		c, err := loadOrCreateMitmCert()
 		if err != nil {
+			log.Errorln("MITM CA init failed: %s", err.Error())
+			tunnel.SetMitmIntercept(nil)
 			return
 		}
+		mitmCertConfig = c
 	}
 
-	if dedicatedWanted && mitmListener == nil {
-		mitmListener, err = mitm.New(addr, mitmCertConfig, cfg.Handler, tunnelImpl)
-		if err != nil {
-			return
-		}
-		log.Infoln("MITM proxy listening at: %s", mitmListener.Address())
-	}
+	dispatcher := mitm.NewDispatcher(mitmCertConfig, cfg.Ports, tunnelImpl, cfg.Handler)
+	tunnel.SetMitmIntercept(dispatcher.Dispatch)
+	log.Infoln("MITM intercept enabled on ports %v", cfg.Ports)
+}
 
-	if transparentWanted {
-		hostsTrie, terr := mitm.BuildHostsTrie(cfg.Hosts)
-		if terr != nil {
-			err = terr
-			return
-		}
-		dispatcher := mitm.NewDispatcher(mitmCertConfig, hostsTrie, []uint16{80, 443}, tunnelImpl, cfg.Handler)
-		tunnel.SetMitmIntercept(dispatcher.Dispatch)
-		mode := "auto-hijack"
-		if hostsTrie != nil {
-			mode = fmt.Sprintf("%d host pattern(s)", len(cfg.Hosts))
-		}
-		log.Infoln("MITM transparent dispatcher active (%s)", mode)
-	} else {
-		tunnel.SetMitmIntercept(nil)
+// MitmCACert returns the active MITM CA certificate as PEM bytes, or nil if
+// MITM has not been initialised yet. Used by the REST API endpoint.
+func MitmCACert() []byte {
+	mitmMux.Lock()
+	defer mitmMux.Unlock()
+	if mitmCertConfig == nil {
+		return nil
 	}
+	return mitmCertConfig.CACertPEM()
 }
 
 // loadOrCreateMitmCert loads the persistent MITM CA from disk, generating a new
@@ -782,12 +754,6 @@ func GetPorts() *Ports {
 		_, portStr, _ := net.SplitHostPort(mixedListener.Address())
 		port, _ := strconv.Atoi(portStr)
 		ports.MixedPort = port
-	}
-
-	if mitmListener != nil {
-		_, portStr, _ := net.SplitHostPort(mitmListener.Address())
-		port, _ := strconv.Atoi(portStr)
-		ports.MitmPort = port
 	}
 
 	if shadowSocksListener != nil {

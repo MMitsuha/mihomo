@@ -28,8 +28,8 @@
   based off latency
 - Remote providers, allowing users to get node lists remotely instead of hard-coding in config
 - Netfilter TCP redirecting. Deploy Mihomo on your Internet gateway with `iptables`.
-- MITM proxy with on-the-fly TLS interception and a regex-based rewrite engine
-  (reject / redirect / header / body rewrite for HTTP and HTTPS).
+- Transparent in-tunnel MITM with on-the-fly TLS interception and a regex-based
+  rewrite engine (reject / redirect / header / body rewrite for HTTP and HTTPS).
 - Comprehensive HTTP RESTful API controller
 
 ## Dashboard
@@ -82,51 +82,51 @@ iptables:
   inbound-interface: eth0 # detect the inbound interface, default is 'lo'
 ```
 
-### MITM proxy
+### MITM
 
-`mitm-port` enables an HTTP CONNECT-style proxy that decrypts intercepted TLS
-traffic using a CA generated on first boot. The CA cert and key are written to
-`mitm.crt` / `mitm.key` under the mihomo home directory. Install `mitm.crt` as
-a trusted root on the client device, or download it from the proxy itself at
-`http://mitm.mihomo/cert.crt`.
-
-In addition to clients that point at `mitm-port` directly, traffic from any
-inbound (TUN, redir, tproxy, mixed, ...) destined for ports 80/443 can be
-hijacked into the same rewrite pipeline. Use `mitm-hosts` to whitelist host
-patterns, or `mitm-auto-hijack: true` to intercept every host:
+MITM doesn't listen on its own port — it's a transparent layer inside the
+tunnel. Whatever traffic any inbound (mixed/http/socks/tun/redir/tproxy)
+dispatches to a port listed under `mitm.ports` is intercepted: TLS is
+terminated with a CA generated on first boot, and the request/response is
+run through `mitm.rules`. Anything not matching a rule passes through with
+no modification.
 
 ```yaml
-mitm-port: 7894
-# Hijack only these hosts when seen on 80/443 from any inbound:
-mitm-hosts:
-  - "+.example.com"
-  - "api.foo.com"
-# Or hijack all 80/443 traffic from every inbound:
-# mitm-auto-hijack: true
-mitm-rules:
-  # block ad requests with 404
-  - url: '^https?://ads\.example\.com/.*'
-    action: reject
-  # rewrite URL with capture-group back-reference
-  - url: '^https?://api\.example\.com/v1/(.*)'
-    action: '302'
-    new: 'https://api.example.com/v2/$1'
-  # rewrite request header
-  - url: '^https?://example\.com/.*'
-    action: request-header
-    old: 'User-Agent: .*'
-    new: 'User-Agent: mihomo-mitm'
-  # rewrite response body
-  - url: '^https?://example\.com/score'
-    action: response-body
-    old: '"score":\d+'
-    new: '"score":999'
+mitm:
+  enable: true
+  ports: [80, 443, 8443]
+  rules:
+    # block ad requests with 404
+    - url: '^https?://ads\.example\.com/.*'
+      action: reject
+    # rewrite URL with capture-group back-reference
+    - url: '^https?://api\.example\.com/v1/(.*)'
+      action: '302'
+      new: 'https://api.example.com/v2/$1'
+    # rewrite request header
+    - url: '^https?://example\.com/.*'
+      action: request-header
+      old: 'User-Agent: .*'
+      new: 'User-Agent: mihomo-mitm'
+    # rewrite response body (chunked or fixed-length, text-like Content-Type)
+    - url: '^https?://example\.com/score'
+      action: response-body
+      old: '"score":\d+'
+      new: '"score":999'
 ```
 
 Available `action` values: `reject`, `reject-200`, `reject-img`, `reject-dict`,
 `reject-array`, `302`, `307`, `request-header`, `request-body`,
 `response-header`, `response-body`. Body-rewrite rules only apply to
 text-like content types (`text/*`, JSON, XML, form-urlencoded).
+
+The CA certificate is written to `mitm.crt` / `mitm.key` under the mihomo
+home directory on first use. Install `mitm.crt` as a trusted root on the
+client device, or fetch it from the running engine via the REST API:
+
+```sh
+curl -OJ http://<external-controller>/mitm/ca.crt
+```
 
 ## Debugging
 

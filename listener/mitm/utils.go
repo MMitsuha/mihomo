@@ -19,6 +19,11 @@ var (
 	ErrInvalidURL      = errors.New("mitm: invalid URL")
 )
 
+const (
+	readDeadline = 65 * time.Second
+	peekDeadline = time.Second
+)
+
 // NewResponse builds a baseline http.Response inheriting the request protocol.
 func NewResponse(code int, body io.Reader, req *http.Request) *http.Response {
 	if body == nil {

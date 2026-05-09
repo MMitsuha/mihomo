@@ -44,6 +44,20 @@ import (
 	"github.com/metacubex/mihomo/tunnel"
 )
 
+func updateMitm(cfg *config.Mitm) {
+	if cfg == nil {
+		rewrite.Update(nil)
+		listener.ApplyMitm(listener.MitmConfig{Enable: false}, tunnel.Tunnel)
+		return
+	}
+	rewrite.Update(cfg.Rules)
+	listener.ApplyMitm(listener.MitmConfig{
+		Enable:  cfg.Enable,
+		Ports:   cfg.Ports,
+		Handler: rewrite.Handler{},
+	}, tunnel.Tunnel)
+}
+
 var mux sync.Mutex
 
 func readConfig(path string) ([]byte, error) {
@@ -103,7 +117,7 @@ func ApplyConfig(cfg *config.Config, force bool) {
 	updateRules(cfg.Rules, cfg.SubRules, cfg.RuleProviders)
 	updateSniffer(cfg.Sniffer)
 	updateHosts(cfg.Hosts)
-	rewrite.Update(cfg.MitmRules)
+	updateMitm(cfg.Mitm)
 	updateGeneral(cfg.General, true)
 	updateNTP(cfg.NTP)
 	updateDNS(cfg.DNS, cfg.General.IPv6)
@@ -143,7 +157,6 @@ func GetGeneral() *config.General {
 			RedirPort:         ports.RedirPort,
 			TProxyPort:        ports.TProxyPort,
 			MixedPort:         ports.MixedPort,
-			MitmPort:          ports.MitmPort,
 			Tun:               listener.GetTunConf(),
 			TuicServer:        listener.GetTuicConf(),
 			ShadowSocksConfig: ports.ShadowSocksConfig,
@@ -207,12 +220,6 @@ func updateListeners(general *config.General, listeners map[string]C.InboundList
 	listener.ReCreateRedir(general.RedirPort, tunnel.Tunnel)
 	listener.ReCreateTProxy(general.TProxyPort, tunnel.Tunnel)
 	listener.ReCreateMixed(general.MixedPort, tunnel.Tunnel)
-	listener.ReCreateMitm(listener.MitmConfig{
-		Port:       general.MitmPort,
-		Hosts:      general.MitmHosts,
-		AutoHijack: general.MitmAutoHijack,
-		Handler:    rewrite.Handler{},
-	}, tunnel.Tunnel)
 	listener.ReCreateShadowSocks(general.ShadowSocksConfig, tunnel.Tunnel)
 	listener.ReCreateVmess(general.VmessConfig, tunnel.Tunnel)
 	listener.ReCreateTuic(general.TuicServer, tunnel.Tunnel)

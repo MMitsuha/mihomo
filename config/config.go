@@ -76,9 +76,6 @@ type Inbound struct {
 	RedirPort         int            `json:"redir-port"`
 	TProxyPort        int            `json:"tproxy-port"`
 	MixedPort         int            `json:"mixed-port"`
-	MitmPort          int            `json:"mitm-port"`
-	MitmHosts         []string       `json:"mitm-hosts"`
-	MitmAutoHijack    bool           `json:"mitm-auto-hijack"`
 	Tun               LC.Tun         `json:"tun"`
 	TuicServer        LC.TuicServer  `json:"tuic-server"`
 	ShadowSocksConfig string         `json:"ss-config"`
@@ -191,6 +188,15 @@ type TLS struct {
 	CustomTrustCert []string
 }
 
+// Mitm enables in-tunnel HTTP/HTTPS interception. Whatever traffic lands on
+// the listed Ports — coming from any inbound — has its TLS terminated and
+// is run through the rewrite Rules.
+type Mitm struct {
+	Enable bool           `json:"enable"`
+	Ports  []uint16       `json:"ports"`
+	Rules  *rewrite.Rules `json:"-"`
+}
+
 // Config is mihomo config manager
 type Config struct {
 	General       *General
@@ -203,7 +209,7 @@ type Config struct {
 	Profile       *Profile
 	Rules         []C.Rule
 	SubRules      map[string][]C.Rule
-	MitmRules     *rewrite.Rules
+	Mitm          *Mitm
 	Users         []auth.AuthUser
 	Proxies       map[string]C.Proxy
 	Listeners     map[string]C.InboundListener
@@ -400,10 +406,7 @@ type RawConfig struct {
 	RedirPort               int                     `yaml:"redir-port" json:"redir-port"`
 	TProxyPort              int                     `yaml:"tproxy-port" json:"tproxy-port"`
 	MixedPort               int                     `yaml:"mixed-port" json:"mixed-port"`
-	MitmPort                int                     `yaml:"mitm-port" json:"mitm-port"`
-	MitmHosts               []string                `yaml:"mitm-hosts" json:"mitm-hosts"`
-	MitmAutoHijack          bool                    `yaml:"mitm-auto-hijack" json:"mitm-auto-hijack"`
-	MitmRules               []rewrite.RawRule       `yaml:"mitm-rules" json:"mitm-rules"`
+	Mitm                    RawMitm                 `yaml:"mitm" json:"mitm"`
 	ShadowSocksConfig       string                  `yaml:"ss-config" json:"ss-config"`
 	VmessConfig             string                  `yaml:"vmess-config" json:"vmess-config"`
 	InboundTfo              bool                    `yaml:"inbound-tfo" json:"inbound-tfo"`
@@ -465,6 +468,13 @@ type RawConfig struct {
 	TLS           RawTLS                    `yaml:"tls" json:"tls"`
 
 	ClashForAndroid RawClashForAndroid `yaml:"clash-for-android" json:"clash-for-android"`
+}
+
+// RawMitm is the YAML/JSON shape of the mitm config block.
+type RawMitm struct {
+	Enable bool              `yaml:"enable" json:"enable"`
+	Ports  []uint16          `yaml:"ports" json:"ports"`
+	Rules  []rewrite.RawRule `yaml:"rules" json:"rules"`
 }
 
 // Parse config
@@ -738,9 +748,9 @@ func ParseRawConfig(rawCfg *RawConfig) (*Config, error) {
 		return nil, err
 	}
 
-	config.MitmRules, err = rewrite.ParseRules(rawCfg.MitmRules)
+	config.Mitm, err = parseMitm(rawCfg.Mitm)
 	if err != nil {
-		return nil, fmt.Errorf("parse mitm rules: %w", err)
+		return nil, err
 	}
 
 	elapsedTime := time.Since(startTime) / time.Millisecond                     // duration in ms
@@ -760,9 +770,6 @@ func parseGeneral(cfg *RawConfig) (*General, error) {
 			RedirPort:         cfg.RedirPort,
 			TProxyPort:        cfg.TProxyPort,
 			MixedPort:         cfg.MixedPort,
-			MitmPort:          cfg.MitmPort,
-			MitmHosts:         cfg.MitmHosts,
-			MitmAutoHijack:    cfg.MitmAutoHijack,
 			ShadowSocksConfig: cfg.ShadowSocksConfig,
 			VmessConfig:       cfg.VmessConfig,
 			AllowLan:          cfg.AllowLan,
@@ -1734,6 +1741,22 @@ func parseTuicServer(rawTuic RawTuicServer, general *General) error {
 		CWND:                  rawTuic.CWND,
 	}
 	return nil
+}
+
+func parseMitm(raw RawMitm) (*Mitm, error) {
+	rules, err := rewrite.ParseRules(raw.Rules)
+	if err != nil {
+		return nil, fmt.Errorf("parse mitm rules: %w", err)
+	}
+	ports := raw.Ports
+	if raw.Enable && len(ports) == 0 {
+		ports = []uint16{80, 443} // sensible default
+	}
+	return &Mitm{
+		Enable: raw.Enable,
+		Ports:  ports,
+		Rules:  rules,
+	}, nil
 }
 
 func parseSniffer(snifferRaw RawSniffer, ruleProviders map[string]P.RuleProvider) (*sniffer.Config, error) {
