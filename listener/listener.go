@@ -401,9 +401,10 @@ func ReCreateTuic(config LC.TuicServer, tunnel C.Tunnel) {
 // MitmConfig configures the in-tunnel MITM dispatcher. With Enable=false,
 // any previously installed dispatcher is cleared.
 type MitmConfig struct {
-	Enable  bool
-	Ports   []uint16
-	Handler mitm.Handler
+	Enable     bool
+	Ports      []uint16
+	Handler    mitm.Handler
+	HostFilter mitm.HostFilter // optional pre-filter on SNI/Host
 }
 
 // ApplyMitm installs (or removes) the in-tunnel MITM dispatcher. MITM is
@@ -428,7 +429,7 @@ func ApplyMitm(cfg MitmConfig, tunnelImpl C.Tunnel) {
 		mitmCertConfig = c
 	}
 
-	dispatcher := mitm.NewDispatcher(mitmCertConfig, cfg.Ports, tunnelImpl, cfg.Handler)
+	dispatcher := mitm.NewDispatcher(mitmCertConfig, cfg.Ports, cfg.HostFilter, tunnelImpl, cfg.Handler)
 	tunnel.SetMitmIntercept(dispatcher.Dispatch)
 	log.Infoln("MITM intercept enabled on ports %v", cfg.Ports)
 }

@@ -24,3 +24,14 @@ func Current() C.RewriteRule {
 	}
 	return r
 }
+
+// MatchesHost is a process-global helper for the MITM dispatcher. Returns true
+// if any active rule could match a connection to host. Returns false (skip
+// MITM) when no rules are configured.
+func MatchesHost(host string) bool {
+	r := current.Load()
+	if r == nil {
+		return false
+	}
+	return r.MatchesHost(host)
+}

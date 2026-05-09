@@ -68,4 +68,28 @@ func (r *Rules) SearchInResponse(do func(C.Rewrite) bool) bool {
 	return false
 }
 
+// MatchesHost reports whether any rule (request or response) could match a
+// connection to the given host. Used by the MITM dispatcher as a pre-filter
+// so hosts no rule cares about don't get their TLS terminated.
+func (r *Rules) MatchesHost(host string) bool {
+	for _, rule := range r.request {
+		if matchesRuleHost(rule, host) {
+			return true
+		}
+	}
+	for _, rule := range r.response {
+		if matchesRuleHost(rule, host) {
+			return true
+		}
+	}
+	return false
+}
+
+func matchesRuleHost(rule C.Rewrite, host string) bool {
+	if hm, ok := rule.(interface{ MatchesHost(string) bool }); ok {
+		return hm.MatchesHost(host)
+	}
+	return true
+}
+
 var _ C.RewriteRule = (*Rules)(nil)

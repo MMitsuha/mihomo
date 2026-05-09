@@ -9,21 +9,28 @@ import (
 	"github.com/metacubex/mihomo/log"
 )
 
+// HostFilter decides whether a destination host (SNI for HTTPS, Host header
+// for HTTP) is worth MITM-ing. Returning false makes the dispatcher pass the
+// connection through verbatim, so untrusted-CA / pinned hosts don't fail
+// loudly with a TLS handshake error.
+type HostFilter func(host string) bool
+
 // Dispatcher decides whether a connection passing through the tunnel should be
-// hijacked into the MITM transparent handler. It matches purely on destination
-// port; the user controls scope by choosing which ports to enable, and the
-// rewrite rules' URL regexes pick out the URLs that actually get rewritten.
+// hijacked into the MITM transparent handler. It matches on destination port,
+// then (optionally) on SNI/Host via HostFilter.
 type Dispatcher struct {
 	opt       *Option
 	tunnel    C.Tunnel
 	additions []inbound.Addition
 
-	ports map[uint16]struct{} // empty = no MITM
+	ports  map[uint16]struct{} // empty = no MITM
+	filter HostFilter          // nil = MITM every host on a matching port
 }
 
 // NewDispatcher builds a dispatcher for the given port set. handler may be
 // nil for a transparent passthrough that just decrypts but doesn't rewrite.
-func NewDispatcher(certCfg *cert.Config, ports []uint16, tunnel C.Tunnel, handler Handler, additions ...inbound.Addition) *Dispatcher {
+// filter may be nil to MITM every host on a matching port.
+func NewDispatcher(certCfg *cert.Config, ports []uint16, filter HostFilter, tunnel C.Tunnel, handler Handler, additions ...inbound.Addition) *Dispatcher {
 	if handler == nil {
 		handler = NopHandler{}
 	}
@@ -39,6 +46,7 @@ func NewDispatcher(certCfg *cert.Config, ports []uint16, tunnel C.Tunnel, handle
 		tunnel:    tunnel,
 		additions: additions,
 		ports:     portSet,
+		filter:    filter,
 	}
 }
 
@@ -68,6 +76,6 @@ func (d *Dispatcher) Dispatch(conn net.Conn, metadata *C.Metadata) bool {
 		return false
 	}
 	log.Debugln("[MITM] hijack %s -> %s", metadata.SourceAddress(), metadata.RemoteAddress())
-	HandleConnTransparent(conn, metadata, d.opt, d.tunnel, d.additions...)
+	HandleConnTransparent(conn, metadata, d.opt, d.filter, d.tunnel, d.additions...)
 	return true
 }

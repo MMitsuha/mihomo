@@ -17,6 +17,12 @@ type Rule struct {
 	ruleType    C.RewriteType
 	ruleRegx    *regexp.Regexp
 	rulePayload string
+
+	// hostMatcher is derived from the host portion of urlRegx. It's used by
+	// the MITM dispatcher to decide whether to bother terminating TLS — if
+	// no rule's hostMatcher matches the SNI, the connection is passed
+	// through verbatim. nil means "could match any host" (extraction failed).
+	hostMatcher *regexp.Regexp
 }
 
 func (r *Rule) ID() string                  { return r.id }
@@ -56,7 +62,7 @@ func (r *Rule) ReplaceSubPayload(input string) string {
 }
 
 // NewRule constructs a rewrite rule.
-func NewRule(urlRegx *regexp.Regexp, ruleType C.RewriteType, ruleRegx *regexp.Regexp, payload string) *Rule {
+func NewRule(urlRegx *regexp.Regexp, ruleType C.RewriteType, ruleRegx *regexp.Regexp, payload string, hostMatcher *regexp.Regexp) *Rule {
 	id, _ := uuid.NewV4()
 	return &Rule{
 		id:          id.String(),
@@ -64,7 +70,19 @@ func NewRule(urlRegx *regexp.Regexp, ruleType C.RewriteType, ruleRegx *regexp.Re
 		ruleType:    ruleType,
 		ruleRegx:    ruleRegx,
 		rulePayload: payload,
+		hostMatcher: hostMatcher,
 	}
+}
+
+// MatchesHost reports whether this rule could match a connection to the given
+// host (SNI for HTTPS, Host header for HTTP). nil hostMatcher means the rule's
+// URL regex didn't have a clean host portion — be permissive and return true.
+func (r *Rule) MatchesHost(host string) bool {
+	if r.hostMatcher == nil {
+		return true
+	}
+	ok, _ := r.hostMatcher.MatchString(host)
+	return ok
 }
 
 var _ C.Rewrite = (*Rule)(nil)

@@ -68,6 +68,59 @@ func TestRuleReplaceURL(t *testing.T) {
 	}
 }
 
+func TestExtractHostPattern(t *testing.T) {
+	cases := []struct {
+		in   string
+		want string
+	}{
+		{`^https?://example\.com/.*`, `example\.com`},
+		{`^https?://api\.foo\.com/v1/(.*)`, `api\.foo\.com`},
+		{`^https?://(api|cdn)\.foo\.com/.*`, `(api|cdn)\.foo\.com`},
+		{`^https?://example\.com$`, `example\.com`},
+		{`^https?://example\.com:8080/.*`, `example\.com`}, // port boundary
+		{`/api/.*`, ``},                                    // no scheme — extraction fails
+		{`^https?://`, ``},                                 // empty host
+	}
+	for _, tc := range cases {
+		t.Run(tc.in, func(t *testing.T) {
+			got := extractHostPattern(tc.in)
+			if got != tc.want {
+				t.Errorf("extractHostPattern(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestRuleMatchesHost(t *testing.T) {
+	r1, _ := ParseRule(RawRule{URL: `^https?://api\.example\.com/v1/(.*)`, Action: C.Mitm302, New: "x"})
+	r2, _ := ParseRule(RawRule{URL: `^https?://(api|cdn)\.foo\.com/.*`, Action: C.MitmReject})
+	r3, _ := ParseRule(RawRule{URL: `^/no-scheme/.*`, Action: C.MitmReject}) // bad pattern, allow-all
+
+	hostMatcher := func(rule C.Rewrite) func(string) bool {
+		hm, _ := rule.(interface{ MatchesHost(string) bool })
+		return hm.MatchesHost
+	}
+
+	if !hostMatcher(r1)("api.example.com") {
+		t.Error("r1 should match api.example.com")
+	}
+	if hostMatcher(r1)("api.other.com") {
+		t.Error("r1 should NOT match api.other.com")
+	}
+	if !hostMatcher(r2)("api.foo.com") {
+		t.Error("r2 should match api.foo.com")
+	}
+	if !hostMatcher(r2)("cdn.foo.com") {
+		t.Error("r2 should match cdn.foo.com")
+	}
+	if hostMatcher(r2)("www.foo.com") {
+		t.Error("r2 should NOT match www.foo.com")
+	}
+	if !hostMatcher(r3)("anything.example.com") {
+		t.Error("r3 with no extractable host should be permissive")
+	}
+}
+
 func TestRuleReplaceSub(t *testing.T) {
 	old := `"score":(\d+)`
 	raw := RawRule{

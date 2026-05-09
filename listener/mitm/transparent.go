@@ -10,6 +10,7 @@ import (
 
 	"github.com/metacubex/mihomo/adapter/inbound"
 	N "github.com/metacubex/mihomo/common/net"
+	"github.com/metacubex/mihomo/component/sniffer"
 	C "github.com/metacubex/mihomo/constant"
 	"github.com/metacubex/mihomo/log"
 	"github.com/metacubex/mihomo/transport/socks5"
@@ -25,7 +26,7 @@ import (
 //
 // Used when a non-MITM inbound (TUN, redir, tproxy, etc.) routes a
 // connection into the MITM dispatcher.
-func HandleConnTransparent(c net.Conn, target *C.Metadata, opt *Option, tunnel C.Tunnel, additions ...inbound.Addition) {
+func HandleConnTransparent(c net.Conn, target *C.Metadata, opt *Option, filter HostFilter, tunnel C.Tunnel, additions ...inbound.Addition) {
 	defer c.Close()
 
 	if opt == nil || opt.CertConfig == nil || target == nil {
@@ -57,6 +58,22 @@ func HandleConnTransparent(c net.Conn, target *C.Metadata, opt *Option, tunnel C
 
 	var tlsState *tls.ConnectionState
 	if first[0] == 0x16 {
+		// Sniff the SNI before terminating. If the user's rules don't target
+		// this host, pass through verbatim so we don't fight HSTS-pinned
+		// services with our self-signed cert.
+		sni, ok := peekSNI(conn, dst)
+		if !ok {
+			// Couldn't read a usable ClientHello; fall back to passthrough.
+			log.Debugln("[MITM] %s: ClientHello unreadable, passing through", dst)
+			passthrough(conn, target, tunnel, additions)
+			return
+		}
+		if filter != nil && !filter(sni) {
+			log.Debugln("[MITM] %s: SNI=%q not targeted by any rule, passing through", dst, sni)
+			passthrough(conn, target, tunnel, additions)
+			return
+		}
+
 		tlsCfg := opt.CertConfig.NewTLSConfigForHost(host)
 		tlsCfg.GetCertificate = wrapCertLogger(tlsCfg.GetCertificate, dst)
 		tlsConn := tls.Server(conn, tlsCfg)
@@ -94,6 +111,39 @@ func HandleConnTransparent(c net.Conn, target *C.Metadata, opt *Option, tunnel C
 	}
 
 	runTransparentLoop(conn, c, target, opt, tlsState, tunnel, additions)
+}
+
+// peekSNI reads enough of the ClientHello (without consuming) to extract SNI.
+// Returns ok=false if the ClientHello is malformed or the read times out.
+func peekSNI(conn *N.BufferedConn, dst string) (string, bool) {
+	if err := conn.SetReadDeadline(time.Now().Add(peekDeadline)); err != nil {
+		return "", false
+	}
+	defer conn.SetReadDeadline(time.Time{})
+
+	header, err := conn.Peek(5)
+	if err != nil || len(header) < 5 {
+		return "", false
+	}
+	if header[0] != 0x16 {
+		return "", false
+	}
+	recordLen := int(header[3])<<8 | int(header[4])
+	total := 5 + recordLen
+	if total > 16384 { // TLS plaintext fragment cap; sanity bound
+		return "", false
+	}
+	buf, err := conn.Peek(total)
+	if err != nil || len(buf) < total {
+		return "", false
+	}
+
+	sni, err := sniffer.SniffTLS(buf)
+	if err != nil || sni == nil {
+		log.Debugln("[MITM] %s: SniffTLS failed: %v", dst, err)
+		return "", false
+	}
+	return *sni, true
 }
 
 // wrapCertLogger reports the SNI/host actually used for cert minting and any

@@ -52,9 +52,10 @@ func updateMitm(cfg *config.Mitm) {
 	}
 	rewrite.Update(cfg.Rules)
 	listener.ApplyMitm(listener.MitmConfig{
-		Enable:  cfg.Enable,
-		Ports:   cfg.Ports,
-		Handler: rewrite.Handler{},
+		Enable:     cfg.Enable,
+		Ports:      cfg.Ports,
+		Handler:    rewrite.Handler{},
+		HostFilter: rewrite.MatchesHost,
 	}, tunnel.Tunnel)
 }
 

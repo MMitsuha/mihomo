@@ -18,10 +18,13 @@ type RawRule struct {
 
 // ParseRule converts a raw rule into a compiled Rule.
 func ParseRule(raw RawRule) (C.Rewrite, error) {
-	urlRegx, err := regexp.Compile(strings.TrimSpace(raw.URL), regexp.None)
+	trimmedURL := strings.TrimSpace(raw.URL)
+	urlRegx, err := regexp.Compile(trimmedURL, regexp.None)
 	if err != nil {
 		return nil, err
 	}
+
+	hostMatcher := compileHostMatcher(trimmedURL)
 
 	var (
 		ruleRegx *regexp.Regexp
@@ -43,7 +46,60 @@ func ParseRule(raw RawRule) (C.Rewrite, error) {
 		payload = raw.New
 	}
 
-	return NewRule(urlRegx, raw.Action, ruleRegx, payload), nil
+	return NewRule(urlRegx, raw.Action, ruleRegx, payload, hostMatcher), nil
+}
+
+// compileHostMatcher attempts to extract the host portion from a URL regex of
+// the form `^https?://<host>/...`. It returns a regex anchored to match a
+// full SNI/Host string, or nil if extraction fails (in which case the rule is
+// treated as matching every host — the safe default).
+func compileHostMatcher(urlPattern string) *regexp.Regexp {
+	host := extractHostPattern(urlPattern)
+	if host == "" {
+		return nil
+	}
+	r, err := regexp.Compile("^"+host+"$", regexp.IgnoreCase)
+	if err != nil {
+		return nil
+	}
+	return r
+}
+
+// extractHostPattern pulls the host portion out of a URL regex. It expects
+// patterns shaped like `^https?://<host>/...` (or http/https variants) and
+// returns the regex string for <host>, or "" if the input doesn't fit.
+func extractHostPattern(urlPattern string) string {
+	s := strings.TrimSpace(urlPattern)
+	s = strings.TrimPrefix(s, "^")
+
+	matched := false
+	for _, p := range []string{"https?://", "https://", "http://"} {
+		if strings.HasPrefix(s, p) {
+			s = s[len(p):]
+			matched = true
+			break
+		}
+	}
+	if !matched {
+		return ""
+	}
+
+	end := len(s)
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c == '\\' && i+1 < len(s) {
+			i++ // skip the escaped char
+			continue
+		}
+		if c == '/' || c == '?' || c == '$' || c == ':' {
+			end = i
+			break
+		}
+	}
+	if end == 0 {
+		return ""
+	}
+	return s[:end]
 }
 
 // ParseRules splits raw rules into request- and response-phase buckets.
