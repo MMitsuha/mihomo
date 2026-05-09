@@ -195,6 +195,10 @@ func runTransparentLoop(conn *N.BufferedConn, srcConn net.Conn, target *C.Metada
 			return
 		}
 		req, err := readRequest(conn.Reader())
+		// Clear the request-read deadline before doing anything else; an
+		// upgraded WebSocket relay must run without one and a long upstream
+		// round-trip must not race the client read clock.
+		_ = conn.SetReadDeadline(time.Time{})
 		if err != nil {
 			if !errors.Is(err, net.ErrClosed) && !os.IsTimeout(err) && !errors.Is(err, http.ErrServerClosed) {
 				log.Debugln("[MITM] %s: read request: %s", dst, err.Error())
