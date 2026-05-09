@@ -43,8 +43,11 @@ func NewDispatcher(certCfg *cert.Config, ports []uint16, tunnel C.Tunnel, handle
 }
 
 // Dispatch is the function passed to tunnel.SetMitmIntercept. Returns true if
-// the connection has been claimed (a goroutine has taken ownership of conn);
-// the tunnel must not touch it further.
+// the connection was handled by MITM; the tunnel must not touch it further.
+//
+// Dispatch runs the transparent handler synchronously because some inbounds
+// (sing-tun, sing-vmess, ...) close the conn the moment HandleTCPConn returns.
+// Spawning a goroutine here would race the inbound's close path.
 func (d *Dispatcher) Dispatch(conn net.Conn, metadata *C.Metadata) bool {
 	if d == nil || conn == nil || metadata == nil {
 		return false
@@ -65,6 +68,6 @@ func (d *Dispatcher) Dispatch(conn net.Conn, metadata *C.Metadata) bool {
 		return false
 	}
 	log.Debugln("[MITM] hijack %s -> %s", metadata.SourceAddress(), metadata.RemoteAddress())
-	go HandleConnTransparent(conn, metadata, d.opt, d.tunnel, d.additions...)
+	HandleConnTransparent(conn, metadata, d.opt, d.tunnel, d.additions...)
 	return true
 }
