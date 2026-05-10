@@ -191,7 +191,7 @@ func rewriteRequestBody(request *http.Request, rule C.Rewrite) bool {
 }
 
 func rewriteResponseBody(response *http.Response, rule C.Rewrite) bool {
-	if !CanRewriteBody(response.ContentLength, response.Header.Get("Content-Type")) {
+	if !CanRewriteResponseBody(response.ContentLength, response.Header.Get("Content-Type")) {
 		return false
 	}
 

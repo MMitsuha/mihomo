@@ -76,7 +76,7 @@ func (a *MitmAuthority) NewTLSConfigForHost(hostname string) *tls.Config {
 			}
 			return a.GetOrCreateCert(host)
 		},
-		NextProtos: []string{"http/1.1"},
+		NextProtos: []string{"h2", "http/1.1"},
 	}
 }
 
