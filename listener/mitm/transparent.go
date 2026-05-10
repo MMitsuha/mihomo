@@ -133,10 +133,12 @@ func peekSNI(conn *N.BufferedConn, dst string) (string, bool) {
 		return "", false
 	}
 	recordLen := int(header[3])<<8 | int(header[4])
-	total := 5 + recordLen
-	if total > 16384 { // TLS plaintext fragment cap; sanity bound
+	// TLSPlaintext.fragment is capped at 2^14 bytes; the 5-byte record
+	// header sits on top of that, so the on-wire record can be 16389 bytes.
+	if recordLen > 16384 {
 		return "", false
 	}
+	total := 5 + recordLen
 	buf, err := conn.Peek(total)
 	if err != nil || len(buf) < total {
 		return "", false
