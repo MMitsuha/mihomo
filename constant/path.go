@@ -212,6 +212,14 @@ func (p *path) GetAssetLocation(file string) string {
 	return P.Join(p.homeDir, file)
 }
 
+func (p *path) RootCA() string {
+	return p.Resolve("mitm_ca.crt")
+}
+
+func (p *path) CAKey() string {
+	return p.Resolve("mitm_ca.key")
+}
+
 func (p *path) GetExecutableFullPath() string {
 	exePath, err := os.Executable()
 	if err != nil {

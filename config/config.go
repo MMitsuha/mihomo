@@ -33,6 +33,7 @@ import (
 	"github.com/metacubex/mihomo/listener"
 	LC "github.com/metacubex/mihomo/listener/config"
 	"github.com/metacubex/mihomo/log"
+	"github.com/metacubex/mihomo/rewrite"
 	R "github.com/metacubex/mihomo/rules"
 	RC "github.com/metacubex/mihomo/rules/common"
 	RP "github.com/metacubex/mihomo/rules/provider"
@@ -207,6 +208,7 @@ type Config struct {
 	Tunnels       []LC.Tunnel
 	Sniffer       *sniffer.Config
 	TLS           *TLS
+	Mitm          *C.MitmConfig
 }
 
 type RawCors struct {
@@ -389,6 +391,12 @@ type RawTLS struct {
 	CustomTrustCert []string `yaml:"custom-certifactes" json:"custom-certifactes"`
 }
 
+type RawMitm struct {
+	Enable bool                  `yaml:"enable" json:"enable"`
+	Ports  []uint16              `yaml:"ports" json:"ports"`
+	Rules  []rewrite.RawMitmRule `yaml:"rules" json:"rules"`
+}
+
 type RawConfig struct {
 	Port                    int                     `yaml:"port" json:"port"`
 	SocksPort               int                     `yaml:"socks-port" json:"socks-port"`
@@ -454,6 +462,7 @@ type RawConfig struct {
 	GeoXUrl       RawGeoXUrl                `yaml:"geox-url" json:"geox-url"`
 	Sniffer       RawSniffer                `yaml:"sniffer" json:"sniffer"`
 	TLS           RawTLS                    `yaml:"tls" json:"tls"`
+	Mitm          RawMitm                   `yaml:"mitm" json:"mitm"`
 
 	ClashForAndroid RawClashForAndroid `yaml:"clash-for-android" json:"clash-for-android"`
 }
@@ -583,6 +592,11 @@ func DefaultRawConfig() *RawConfig {
 			ParsePureIp:     true,
 			OverrideDest:    true,
 		},
+		Mitm: RawMitm{
+			Enable: false,
+			Ports:  []uint16{},
+			Rules:  []rewrite.RawMitmRule{},
+		},
 		ExternalUIURL: "https://github.com/MetaCubeX/metacubexd/archive/refs/heads/gh-pages.zip",
 		ExternalControllerCors: RawCors{
 			AllowOrigins:        []string{"*"},
@@ -654,6 +668,12 @@ func ParseRawConfig(rawCfg *RawConfig) (*Config, error) {
 		return nil, err
 	}
 	config.TLS = tlsCfg
+
+	mitmCfg, err := parseMitm(rawCfg.Mitm)
+	if err != nil {
+		return nil, err
+	}
+	config.Mitm = mitmCfg
 
 	proxies, providers, err := parseProxies(rawCfg)
 	if err != nil {
@@ -851,6 +871,33 @@ func parseTLS(cfg *RawConfig) (*TLS, error) {
 		ClientAuthCert:  cfg.TLS.ClientAuthCert,
 		EchKey:          cfg.TLS.EchKey,
 		CustomTrustCert: cfg.TLS.CustomTrustCert,
+	}, nil
+}
+
+func parseMitm(rawMitm RawMitm) (*C.MitmConfig, error) {
+	var (
+		req []C.Rewrite
+		res []C.Rewrite
+	)
+
+	for idx, line := range rawMitm.Rules {
+		rule, err := rewrite.ParseRewrite(line)
+		if err != nil {
+			return nil, fmt.Errorf("mitm.rules[%d] parse failure: %w", idx, err)
+		}
+
+		switch rule.RuleType() {
+		case C.MitmResponseHeader, C.MitmResponseBody:
+			res = append(res, rule)
+		default:
+			req = append(req, rule)
+		}
+	}
+
+	return &C.MitmConfig{
+		Enable: rawMitm.Enable,
+		Ports:  rawMitm.Ports,
+		Rules:  rewrite.NewRewriteRules(req, res),
 	}, nil
 }
 

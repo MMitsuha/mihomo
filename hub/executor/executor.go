@@ -100,6 +100,7 @@ func ApplyConfig(cfg *config.Config, force bool) {
 	updateUsers(cfg.Users)
 	updateProxies(cfg.Proxies, cfg.Providers)
 	updateRules(cfg.Rules, cfg.SubRules, cfg.RuleProviders)
+	updateMitm(cfg.Mitm)
 	updateSniffer(cfg.Sniffer)
 	updateHosts(cfg.Hosts)
 	updateGeneral(cfg.General, true)
@@ -311,6 +312,10 @@ func updateProxies(proxies map[string]C.Proxy, providers map[string]P.ProxyProvi
 
 func updateRules(rules []C.Rule, subRules map[string][]C.Rule, ruleProviders map[string]P.RuleProvider) {
 	tunnel.UpdateRules(rules, subRules, ruleProviders)
+}
+
+func updateMitm(mitm *C.MitmConfig) {
+	tunnel.UpdateMitm(mitm)
 }
 
 func loadProvider[T P.Provider](providers map[string]T) {
