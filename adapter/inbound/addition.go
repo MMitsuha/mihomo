@@ -76,4 +76,14 @@ func WithIntercepted(intercepted bool) Addition {
 	}
 }
 
+// WithType overrides metadata.Type. Used by the MITM dispatcher so a
+// connection re-entering the tunnel for passthrough or upstream dial
+// keeps the inbound type the original listener stamped on it (TUN,
+// REDIR, TPROXY, ...) instead of being re-typed to HTTP by inbound.NewHTTP.
+func WithType(t C.Type) Addition {
+	return func(metadata *C.Metadata) {
+		metadata.Type = t
+	}
+}
+
 func Placeholder(metadata *C.Metadata) {}

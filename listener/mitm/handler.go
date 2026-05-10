@@ -43,18 +43,14 @@ func (NopHandler) HandleError(*Session, error)                            {}
 // encodings from traffic that no rule is going to rewrite, contradicting the
 // "unmatched traffic passes through unchanged" contract in the README.
 func prepareRequest(tlsState *tls.ConnectionState, req *http.Request) {
-	if h := req.Header.Get("Host"); h != "" {
-		req.Host = h
-	}
 	if req.URL.Host == "" {
 		req.URL.Host = req.Host
-	}
-	if req.URL.Scheme == "" {
-		req.URL.Scheme = "http"
 	}
 	if tlsState != nil {
 		req.TLS = tlsState
 		req.URL.Scheme = "https"
+	} else if req.URL.Scheme == "" {
+		req.URL.Scheme = "http"
 	}
 }
 
