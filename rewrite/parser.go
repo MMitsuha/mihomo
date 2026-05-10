@@ -35,11 +35,13 @@ func ParseRewrite(line RawMitmRule) (C.Rewrite, error) {
 		rulePayload = line.New
 	case C.MitmRequestBody, C.MitmResponseBody:
 		old := ".*"
+		options := regexp.RegexOptions(regexp.Singleline)
 		if line.Old != nil {
 			old = *line.Old
+			options = regexp.None
 		}
 
-		ruleRegx, err = regexp.Compile(old, regexp.Singleline)
+		ruleRegx, err = regexp.Compile(old, options)
 		if err != nil {
 			return nil, err
 		}

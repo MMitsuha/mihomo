@@ -106,7 +106,11 @@ func removeExtraHTTPHostPort(req *http.Request) {
 		host = req.URL.Host
 	}
 
-	if pHost, port, err := net.SplitHostPort(host); err == nil && port == "80" {
+	defaultPort := "80"
+	if req.TLS != nil || req.URL.Scheme == "https" {
+		defaultPort = "443"
+	}
+	if pHost, port, err := net.SplitHostPort(host); err == nil && port == defaultPort {
 		host = pHost
 		if ip, err := netip.ParseAddr(pHost); err == nil && ip.Is6() {
 			host = "[" + host + "]"

@@ -130,3 +130,45 @@ mitm:
 		t.Fatal("expected +.domain.com to match itself and subdomains")
 	}
 }
+
+func TestParseMitmConfigMatchesBeeceptorExample(t *testing.T) {
+	raw, err := UnmarshalRawConfig([]byte(`
+mitm:
+  enable: true
+  domain:
+    - +.beeceptor.com
+  ports: [80, 443, 8443]
+  rules:
+    - url: '^https?://echo\.free\.beeceptor\.com/.*'
+      action: request-header
+      old: 'User-Agent: .*'
+      new: 'User-Agent: mihomo-mitm'
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	mitm, err := parseMitm(raw.Mitm, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !mitm.ShouldHandleDomain("echo.free.beeceptor.com") {
+		t.Fatal("expected +.beeceptor.com to match echo.free.beeceptor.com")
+	}
+	if !mitm.ShouldHandle(443) {
+		t.Fatal("expected MITM to handle port 443")
+	}
+
+	var foundRequestHeader bool
+	mitm.Rules.SearchInRequest(func(rule C.Rewrite) bool {
+		matched, err := rule.URLRegx().MatchString("https://echo.free.beeceptor.com/")
+		if err != nil {
+			t.Fatal(err)
+		}
+		foundRequestHeader = rule.RuleType() == C.MitmRequestHeader && matched
+		return foundRequestHeader
+	})
+	if !foundRequestHeader {
+		t.Fatal("expected Beeceptor request-header rule to match https://echo.free.beeceptor.com/")
+	}
+}

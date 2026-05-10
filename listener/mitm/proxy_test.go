@@ -68,9 +68,12 @@ func (fakeTunnel) HandleUDPPacket(C.UDPPacket, *C.Metadata) {}
 func (fakeTunnel) NatTable() C.NatTable { return nil }
 
 type fakeTLSTunnel struct {
-	t         *testing.T
-	authority *ca.MitmAuthority
-	h2Seen    chan bool
+	t           *testing.T
+	authority   *ca.MitmAuthority
+	h2Seen      chan bool
+	userAgent   chan string
+	body        string
+	contentType string
 }
 
 func (f fakeTLSTunnel) HandleTCPConn(conn net.Conn, metadata *C.Metadata) {
@@ -102,9 +105,24 @@ func (f fakeTLSTunnel) HandleTCPConn(conn net.Conn, metadata *C.Metadata) {
 			if request.ProtoMajor != 2 {
 				f.t.Errorf("expected upstream HTTP/2 request, got %s", request.Proto)
 			}
-			body := `{"score":1}`
-			w.Header().Set("Content-Type", "application/json")
-			w.Header().Set("Content-Length", strconv.Itoa(len(body)))
+			if f.userAgent != nil {
+				select {
+				case f.userAgent <- request.Header.Get("User-Agent"):
+				default:
+				}
+			}
+			body := f.body
+			if body == "" {
+				body = `{"score":1}`
+			}
+			contentType := f.contentType
+			if contentType == "" {
+				contentType = "application/json"
+			}
+			w.Header().Set("Content-Type", contentType)
+			if f.body == "" {
+				w.Header().Set("Content-Length", strconv.Itoa(len(body)))
+			}
 			_, _ = io.WriteString(w, body)
 		}),
 	}
@@ -290,7 +308,7 @@ func TestHandleHTTPSHTTP2ResponseBodyRewrite(t *testing.T) {
 	}
 	defer h2Conn.Close()
 
-	request, err := http.NewRequest(http.MethodGet, "https://example.com/score", nil)
+	request, err := http.NewRequest(http.MethodGet, "https://example.com:443/score", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -325,5 +343,209 @@ func TestHandleHTTPSHTTP2ResponseBodyRewrite(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for upstream HTTP/2 request")
+	}
+}
+
+func TestHandleHTTPSHTTP2RequestHeaderRewriteWithDefaultPort(t *testing.T) {
+	old := `User-Agent: .*`
+	rule, err := rewrite.ParseRewrite(rewrite.RawMitmRule{
+		Url:    `^https?://echo\.free\.beeceptor\.com/.*`,
+		Action: C.MitmRequestHeader,
+		Old:    &old,
+		New:    `User-Agent: mihomo-mitm`,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	dir := t.TempDir()
+	caPath := filepath.Join(dir, "mitm_ca.crt")
+	keyPath := filepath.Join(dir, "mitm_ca.key")
+	if err = ca.GenerateAndSaveMitmCA(caPath, keyPath); err != nil {
+		t.Fatal(err)
+	}
+	rootCA, err := os.ReadFile(caPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = ca.AddCertificate(string(rootCA)); err != nil {
+		t.Fatal(err)
+	}
+	defer ca.ResetCertificate()
+
+	authority, err := ca.LoadMitmAuthority(caPath, keyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h2Seen := make(chan bool, 1)
+	userAgent := make(chan string, 1)
+
+	client, server := net.Pipe()
+	defer client.Close()
+
+	metadata := &C.Metadata{
+		NetWork: C.TCP,
+		Type:    C.HTTP,
+		Host:    "echo.free.beeceptor.com",
+		DstPort: 443,
+		SrcIP:   netip.MustParseAddr("127.0.0.1"),
+		SrcPort: 12345,
+	}
+
+	go mitm.HandleConn(server, metadata, fakeTLSTunnel{t: t, authority: authority, h2Seen: h2Seen, userAgent: userAgent}, &mitm.Option{
+		Authority: authority,
+		Handler:   rewrite.NewHandler(rewrite.NewRewriteRules([]C.Rewrite{rule}, nil)),
+	})
+
+	tlsConn := tls.Client(client, &tls.Config{
+		InsecureSkipVerify: true,
+		ServerName:         "echo.free.beeceptor.com",
+		NextProtos:         []string{http.Http2NextProtoTLS},
+	})
+	if err = tlsConn.Handshake(); err != nil {
+		t.Fatal(err)
+	}
+
+	h2Transport := &http.Http2Transport{}
+	h2Conn, err := h2Transport.NewClientConn(tlsConn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer h2Conn.Close()
+
+	request, err := http.NewRequest(http.MethodGet, "https://echo.free.beeceptor.com:443/", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("User-Agent", "before")
+	response, err := h2Conn.RoundTrip(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = io.Copy(io.Discard, response.Body)
+	_ = response.Body.Close()
+	if err = h2Conn.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case ok := <-h2Seen:
+		if !ok {
+			t.Fatal("expected upstream HTTP/2")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for upstream HTTP/2 request")
+	}
+
+	select {
+	case got := <-userAgent:
+		if got != "mihomo-mitm" {
+			t.Fatalf("expected rewritten User-Agent, got %q", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for upstream request")
+	}
+}
+
+func TestHandleHTTPSHTTP2ResponseBodyRewriteUnknownLength(t *testing.T) {
+	old := `loc=.*`
+	rule, err := rewrite.ParseRewrite(rewrite.RawMitmRule{
+		Url:    `^https?://crypto\.cloudflare\.com/cdn-cgi/trace`,
+		Action: C.MitmResponseBody,
+		Old:    &old,
+		New:    `loc=AWA`,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	dir := t.TempDir()
+	caPath := filepath.Join(dir, "mitm_ca.crt")
+	keyPath := filepath.Join(dir, "mitm_ca.key")
+	if err = ca.GenerateAndSaveMitmCA(caPath, keyPath); err != nil {
+		t.Fatal(err)
+	}
+	rootCA, err := os.ReadFile(caPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = ca.AddCertificate(string(rootCA)); err != nil {
+		t.Fatal(err)
+	}
+	defer ca.ResetCertificate()
+
+	authority, err := ca.LoadMitmAuthority(caPath, keyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h2Seen := make(chan bool, 1)
+
+	client, server := net.Pipe()
+	defer client.Close()
+
+	metadata := &C.Metadata{
+		NetWork: C.TCP,
+		Type:    C.HTTP,
+		Host:    "crypto.cloudflare.com",
+		DstPort: 443,
+		SrcIP:   netip.MustParseAddr("127.0.0.1"),
+		SrcPort: 12345,
+	}
+
+	traceBody := "fl=447f114\nh=crypto.cloudflare.com\nloc=US\nhttp=http/2\n"
+	go mitm.HandleConn(server, metadata, fakeTLSTunnel{t: t, authority: authority, h2Seen: h2Seen, body: traceBody, contentType: "text/plain"}, &mitm.Option{
+		Authority: authority,
+		Handler:   rewrite.NewHandler(rewrite.NewRewriteRules(nil, []C.Rewrite{rule})),
+	})
+
+	tlsConn := tls.Client(client, &tls.Config{
+		InsecureSkipVerify: true,
+		ServerName:         "crypto.cloudflare.com",
+		NextProtos:         []string{http.Http2NextProtoTLS},
+	})
+	if err = tlsConn.Handshake(); err != nil {
+		t.Fatal(err)
+	}
+
+	h2Transport := &http.Http2Transport{}
+	h2Conn, err := h2Transport.NewClientConn(tlsConn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer h2Conn.Close()
+
+	request, err := http.NewRequest(http.MethodGet, "https://crypto.cloudflare.com:443/cdn-cgi/trace", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := h2Conn.RoundTrip(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = h2Conn.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case ok := <-h2Seen:
+		if !ok {
+			t.Fatal("expected upstream HTTP/2")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for upstream HTTP/2 request")
+	}
+
+	got := string(body)
+	if !strings.Contains(got, "loc=AWA") {
+		t.Fatalf("expected rewritten location, got %q", got)
+	}
+	if strings.Contains(got, "loc=US") {
+		t.Fatalf("expected original location to be removed, got %q", got)
 	}
 }

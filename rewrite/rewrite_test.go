@@ -54,12 +54,37 @@ func TestRewriteSubPayloadBackReferences(t *testing.T) {
 	}
 }
 
+func TestRewriteBodyMultilineRegexKeepsFollowingLines(t *testing.T) {
+	old := `(?m)^loc=.*$`
+	rule, err := ParseRewrite(RawMitmRule{
+		Url:    `^https?://crypto\.cloudflare\.com/cdn-cgi/trace`,
+		Action: C.MitmResponseBody,
+		Old:    &old,
+		New:    `loc=AWA`,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got := rule.ReplaceSubPayload("http=http/2\nloc=US\ntls=TLSv1.3\nsni=plaintext")
+	want := "http=http/2\nloc=AWA\ntls=TLSv1.3\nsni=plaintext"
+	if got != want {
+		t.Fatalf("expected %q, got %q", want, got)
+	}
+}
+
 func TestCanRewriteBodyTextLikeContentType(t *testing.T) {
 	if !CanRewriteBody(12, "application/json; charset=utf-8") {
 		t.Fatal("expected json body to be rewriteable")
 	}
 	if CanRewriteBody(-1, "application/json") {
-		t.Fatal("expected unknown content length to be rejected")
+		t.Fatal("expected request body with unknown content length to be rejected")
+	}
+	if !CanRewriteResponseBody(-1, "text/plain") {
+		t.Fatal("expected response body with unknown content length to be rewriteable")
+	}
+	if CanRewriteResponseBody(0, "text/plain") {
+		t.Fatal("expected empty response body to be rejected")
 	}
 	if CanRewriteBody(12, "application/octet-stream") {
 		t.Fatal("expected binary content type to be rejected")

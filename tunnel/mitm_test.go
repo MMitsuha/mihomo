@@ -1,12 +1,14 @@
 package tunnel
 
 import (
+	"context"
 	"net"
 	"testing"
 
 	N "github.com/metacubex/mihomo/common/net"
 	"github.com/metacubex/mihomo/component/trie"
 	C "github.com/metacubex/mihomo/constant"
+	"github.com/metacubex/tls"
 )
 
 func TestGetMitmConfigMatchesHTTPHostDomainFilter(t *testing.T) {
@@ -53,6 +55,35 @@ func TestGetMitmConfigSkipsHTTPHostOutsideDomainFilter(t *testing.T) {
 	cfg, decision := getMitmConfig(N.NewBufferedConn(server), metadata)
 	if cfg != nil || decision != mitmDecisionSkip {
 		t.Fatalf("expected MITM skip decision, got cfg=%v decision=%d", cfg, decision)
+	}
+}
+
+func TestGetMitmConfigMatchesTLSSNIDomainFilter(t *testing.T) {
+	defer restoreMitmConfigForTest(setMitmConfigForTest(&C.MitmConfig{
+		Enable:         true,
+		Ports:          []uint16{443},
+		DomainMatchers: testMitmDomainMatchers(t, "example.com"),
+	}))(t)
+
+	client, server := net.Pipe()
+	defer client.Close()
+	defer server.Close()
+
+	go func() {
+		tlsConn := tls.Client(client, &tls.Config{
+			ServerName:         "ads.example.com",
+			InsecureSkipVerify: true,
+		})
+		_ = tlsConn.HandshakeContext(context.Background())
+	}()
+
+	metadata := &C.Metadata{NetWork: C.TCP, Type: C.HTTP, DstPort: 443}
+	cfg, decision := getMitmConfig(N.NewBufferedConn(server), metadata)
+	if cfg == nil || decision != mitmDecisionHandle {
+		t.Fatalf("expected MITM handle decision, got cfg=%v decision=%d", cfg, decision)
+	}
+	if metadata.SniffHost != "ads.example.com" {
+		t.Fatalf("expected sniffed host to be recorded, got %q", metadata.SniffHost)
 	}
 }
 
