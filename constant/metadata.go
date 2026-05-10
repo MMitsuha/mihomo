@@ -42,6 +42,7 @@ const (
 	SUDOKU
 	TRUSTTUNNEL
 	INNER
+	MITM
 )
 
 type AddrType byte
@@ -120,6 +121,8 @@ func (t Type) String() string {
 		return "TrustTunnel"
 	case INNER:
 		return "Inner"
+	case MITM:
+		return "Mitm"
 	default:
 		return "Unknown"
 	}
@@ -166,6 +169,8 @@ func ParseType(t string) (*Type, error) {
 		res = TRUSTTUNNEL
 	case "INNER":
 		res = INNER
+	case "MITM", "Mitm":
+		res = MITM
 	default:
 		return nil, fmt.Errorf("unknown type: %s", t)
 	}
@@ -201,6 +206,7 @@ type Metadata struct {
 	SpecialRules string     `json:"specialRules"`
 	RemoteDst    string     `json:"remoteDestination"`
 	DSCP         uint8      `json:"dscp"`
+	UserAgent    string     `json:"userAgent,omitempty"`
 
 	RawSrcAddr net.Addr `json:"-"`
 	RawDstAddr net.Addr `json:"-"`

@@ -25,7 +25,9 @@ import (
 	"github.com/metacubex/mihomo/constant/features"
 	P "github.com/metacubex/mihomo/constant/provider"
 	icontext "github.com/metacubex/mihomo/context"
+	"github.com/metacubex/mihomo/listener/mitm"
 	"github.com/metacubex/mihomo/log"
+	"github.com/metacubex/mihomo/rewrite"
 	"github.com/metacubex/mihomo/tunnel/statistic"
 )
 
@@ -40,6 +42,7 @@ var (
 	udpQueues     []chan C.PacketAdapter
 	natTable      = nat.New()
 	rules         []C.Rule
+	mitmConfig    *C.MitmConfig
 	listeners     = make(map[string]C.InboundListener)
 	subRules      map[string][]C.Rule
 	proxies       = make(map[string]C.Proxy)
@@ -200,6 +203,12 @@ func UpdateRules(newRules []C.Rule, newSubRule map[string][]C.Rule, rp map[strin
 	rules = newRules
 	ruleProviders = rp
 	subRules = newSubRule
+	configMux.Unlock()
+}
+
+func UpdateMitm(newMitm *C.MitmConfig) {
+	configMux.Lock()
+	mitmConfig = newMitm
 	configMux.Unlock()
 }
 
@@ -520,6 +529,16 @@ func handleTCPConn(connCtx C.ConnContext) {
 		return
 	}
 
+	if cfg := getMitmConfig(metadata); cfg != nil {
+		opt, err := mitm.NewOption(rewrite.NewHandler(cfg.Rules))
+		if err != nil {
+			log.Warnln("[MITM] initialize failed: %s", err.Error())
+			return
+		}
+		mitm.HandleConn(conn, metadata, Tunnel, opt)
+		return
+	}
+
 	peekMutex := sync.Mutex{}
 	if !conn.Peeked() {
 		peekMutex.Lock()
@@ -601,6 +620,20 @@ func handleTCPConn(connCtx C.ConnContext) {
 	defer peekMutex.Unlock()
 	_ = conn.SetReadDeadline(time.Time{}) // reset
 	handleSocket(conn, remoteConn)
+}
+
+func getMitmConfig(metadata *C.Metadata) *C.MitmConfig {
+	if metadata.NetWork != C.TCP || metadata.Type == C.MITM || metadata.Type == C.INNER {
+		return nil
+	}
+
+	configMux.RLock()
+	cfg := mitmConfig
+	configMux.RUnlock()
+	if cfg == nil || !cfg.ShouldHandle(metadata.DstPort) {
+		return nil
+	}
+	return cfg
 }
 
 func logMetadataErr(metadata *C.Metadata, rule C.Rule, proxy C.ProxyAdapter, err error) {
