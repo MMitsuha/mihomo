@@ -59,6 +59,15 @@ func (r *Rule) ReplaceSubPayload(input string) string {
 	pos := 0
 	match, err := r.ruleRegx.FindStringMatch(input)
 	for err == nil && match != nil {
+		// Zero-length matches consume nothing; treating them as substitution
+		// sites would insert the payload at every empty position (e.g. `.*`
+		// produces one full match plus an empty match at EOF, doubling the
+		// payload). FindNextMatch still advances past zero-width hits, so
+		// skipping the body here is safe.
+		if match.Length == 0 {
+			match, err = r.ruleRegx.FindNextMatch(match)
+			continue
+		}
 		if match.Index > pos {
 			b.WriteString(string(runes[pos:match.Index]))
 		}

@@ -35,7 +35,11 @@ func ParseRule(raw RawRule) (C.Rewrite, error) {
 	case C.Mitm302, C.Mitm307:
 		payload = raw.New
 	case C.MitmRequestHeader, C.MitmRequestBody, C.MitmResponseHeader, C.MitmResponseBody:
-		old := ".*"
+		// `\A[\s\S]*\z` matches the entire input exactly once (anchored
+		// start + end, [\s\S] consumes newlines). The naive default `.*`
+		// also produces a zero-length match at EOF, which the substitution
+		// loop would treat as a second hit and append the payload twice.
+		old := `\A[\s\S]*\z`
 		if raw.Old != nil {
 			old = *raw.Old
 		}

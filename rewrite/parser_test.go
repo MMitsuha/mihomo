@@ -164,6 +164,57 @@ func TestRuleReplaceSubOverlap(t *testing.T) {
 	}
 }
 
+// TestRuleReplaceSubOmittedOld covers the omitted-`old` default. Earlier
+// versions defaulted to `.*` (with Singleline), which produced a full match
+// plus a zero-length match at EOF and therefore duplicated the payload —
+// a body rule new=`x` would rewrite "abc" to "xx" instead of "x".
+func TestRuleReplaceSubOmittedOld(t *testing.T) {
+	raw := RawRule{
+		URL:    `.*`,
+		Action: C.MitmRequestBody,
+		// Old intentionally omitted to exercise the parser default.
+		New: "x",
+	}
+	rule, err := ParseRule(raw)
+	if err != nil {
+		t.Fatalf("ParseRule: %v", err)
+	}
+	got := rule.ReplaceSubPayload("abc")
+	if got != "x" {
+		t.Errorf("ReplaceSubPayload = %q, want %q", got, "x")
+	}
+	got = rule.ReplaceSubPayload("line1\nline2")
+	if got != "x" {
+		t.Errorf("ReplaceSubPayload (multiline) = %q, want %q", got, "x")
+	}
+	// Empty input is intentionally not exercised: CanRewriteRequestBody
+	// rejects ContentLength <= 0 and replaceHeader bails on empty headers,
+	// so the substitution path is never invoked with an empty string.
+}
+
+// TestRuleReplaceSubZeroLengthSkip locks in the zero-length-match skip even
+// when the user supplies a pattern that matches the empty string at every
+// position (e.g. `\d*` against non-digit input).
+func TestRuleReplaceSubZeroLengthSkip(t *testing.T) {
+	old := `\d*`
+	raw := RawRule{
+		URL:    `.*`,
+		Action: C.MitmResponseBody,
+		Old:    &old,
+		New:    "X",
+	}
+	rule, err := ParseRule(raw)
+	if err != nil {
+		t.Fatalf("ParseRule: %v", err)
+	}
+	if got := rule.ReplaceSubPayload("abc"); got != "abc" {
+		t.Errorf("ReplaceSubPayload = %q, want %q", got, "abc")
+	}
+	if got := rule.ReplaceSubPayload("a1b22c"); got != "aXbXc" {
+		t.Errorf("ReplaceSubPayload = %q, want %q", got, "aXbXc")
+	}
+}
+
 // TestRuleReplaceSubMultibyte verifies offset handling when the input contains
 // runes wider than one byte. regexp2 reports match offsets in runes, so the
 // rewriter must slice on the rune view (not bytes) to land replacements in
