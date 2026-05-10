@@ -88,8 +88,11 @@ MITM doesn't listen on its own port — it's a transparent layer inside the
 tunnel. Whatever traffic any inbound (mixed/http/socks/tun/redir/tproxy)
 dispatches to a port listed under `mitm.ports` is intercepted: TLS is
 terminated with a CA generated on first boot, and the request/response is
-run through `mitm.rules`. Anything not matching a rule passes through with
-no modification.
+run through `mitm.rules`. Connections to a host that no rule targets pass
+through verbatim — the engine never terminates TLS or parses HTTP for
+those, so wire bytes survive untouched. (Once a host is targeted, every
+exchange to it is parsed and re-emitted, which can rewrite hop-by-hop
+headers and the Connection header even for requests no URL rule matches.)
 
 ```yaml
 mitm:

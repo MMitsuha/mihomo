@@ -112,6 +112,15 @@ func HandleConnTransparent(c net.Conn, target *C.Metadata, opt *Option, filter H
 			passthrough(conn, target, tunnel, additions)
 			return
 		}
+		// Mirror the TLS branch: if no rule targets this host, pass the
+		// stream through verbatim instead of running it through the proxy
+		// loop, which would otherwise normalise hop-by-hop headers and
+		// rewrite Connection on the response.
+		if filter != nil && !filter(host) {
+			log.Debugln("[MITM] %s: host=%q not targeted by any rule, passing through", dst, host)
+			passthrough(conn, target, tunnel, additions)
+			return
+		}
 	}
 
 	runTransparentLoop(conn, c, target, opt, tlsState, tunnel, additions)
