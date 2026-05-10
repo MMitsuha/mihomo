@@ -392,9 +392,11 @@ type RawTLS struct {
 }
 
 type RawMitm struct {
-	Enable bool                  `yaml:"enable" json:"enable"`
-	Ports  []uint16              `yaml:"ports" json:"ports"`
-	Rules  []rewrite.RawMitmRule `yaml:"rules" json:"rules"`
+	Enable             bool                     `yaml:"enable" json:"enable"`
+	Domain             []string                 `yaml:"domain" json:"domain"`
+	Ports              []uint16                 `yaml:"ports" json:"ports"`
+	EncryptedSNIPolicy C.MitmEncryptedSNIPolicy `yaml:"encrypted-sni-policy" json:"encrypted-sni-policy"`
+	Rules              []rewrite.RawMitmRule    `yaml:"rules" json:"rules"`
 }
 
 type RawConfig struct {
@@ -594,6 +596,7 @@ func DefaultRawConfig() *RawConfig {
 		},
 		Mitm: RawMitm{
 			Enable: false,
+			Domain: []string{},
 			Ports:  []uint16{},
 			Rules:  []rewrite.RawMitmRule{},
 		},
@@ -669,12 +672,6 @@ func ParseRawConfig(rawCfg *RawConfig) (*Config, error) {
 	}
 	config.TLS = tlsCfg
 
-	mitmCfg, err := parseMitm(rawCfg.Mitm)
-	if err != nil {
-		return nil, err
-	}
-	config.Mitm = mitmCfg
-
 	proxies, providers, err := parseProxies(rawCfg)
 	if err != nil {
 		return nil, err
@@ -695,6 +692,12 @@ func ParseRawConfig(rawCfg *RawConfig) (*Config, error) {
 		return nil, err
 	}
 	config.RuleProviders = ruleProviders
+
+	mitmCfg, err := parseMitm(rawCfg.Mitm, ruleProviders)
+	if err != nil {
+		return nil, err
+	}
+	config.Mitm = mitmCfg
 
 	subRules, err := parseSubRules(rawCfg, proxies, ruleProviders)
 	if err != nil {
@@ -874,7 +877,7 @@ func parseTLS(cfg *RawConfig) (*TLS, error) {
 	}, nil
 }
 
-func parseMitm(rawMitm RawMitm) (*C.MitmConfig, error) {
+func parseMitm(rawMitm RawMitm, ruleProviders map[string]P.RuleProvider) (*C.MitmConfig, error) {
 	var (
 		req []C.Rewrite
 		res []C.Rewrite
@@ -894,11 +897,27 @@ func parseMitm(rawMitm RawMitm) (*C.MitmConfig, error) {
 		}
 	}
 
+	domainMatchers, err := parseMitmDomain(rawMitm.Domain, ruleProviders)
+	if err != nil {
+		return nil, err
+	}
+
 	return &C.MitmConfig{
-		Enable: rawMitm.Enable,
-		Ports:  rawMitm.Ports,
-		Rules:  rewrite.NewRewriteRules(req, res),
+		Enable:             rawMitm.Enable,
+		Domain:             rawMitm.Domain,
+		Ports:              rawMitm.Ports,
+		Rules:              rewrite.NewRewriteRules(req, res),
+		DomainMatchers:     domainMatchers,
+		EncryptedSNIPolicy: rawMitm.EncryptedSNIPolicy,
 	}, nil
+}
+
+func parseMitmDomain(domains []string, ruleProviders map[string]P.RuleProvider) ([]C.DomainMatcher, error) {
+	domainMatchers, err := parseDomain(domains, nil, "mitm.domain", ruleProviders)
+	if err != nil {
+		return nil, fmt.Errorf("error in mitm.domain, error:%w", err)
+	}
+	return domainMatchers, nil
 }
 
 func parseProxies(cfg *RawConfig) (proxies map[string]C.Proxy, providersMap map[string]P.ProxyProvider, err error) {

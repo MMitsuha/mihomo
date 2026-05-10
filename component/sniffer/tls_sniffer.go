@@ -31,6 +31,13 @@ func (e *errNeedAtLeastData) Unwrap() error {
 
 var _ sniffer.Sniffer = (*TLSSniffer)(nil)
 
+const extensionEncryptedClientHello = 0xfe0d
+
+type TLSClientHelloInfo struct {
+	ServerName           string
+	EncryptedClientHello bool
+}
+
 type TLSSniffer struct {
 	*BaseSniffer
 }
@@ -66,9 +73,17 @@ func IsValidTLSVersion(major, minor byte) bool {
 	return major == 3
 }
 
-// ReadClientHello returns server name (if any) from TLS client hello message.
+func NeedMoreDataLength(err error) (int, bool) {
+	var e *errNeedAtLeastData
+	if errors.As(err, &e) {
+		return e.length, true
+	}
+	return 0, false
+}
+
+// ReadClientHelloInfo returns selected metadata from a TLS client hello message.
 // https://github.com/golang/go/blob/master/src/crypto/tls/handshake_messages.go#L300
-func ReadClientHello(data []byte) (*string, error) {
+func ReadClientHelloInfo(data []byte) (*TLSClientHelloInfo, error) {
 	if len(data) < 42 {
 		return nil, ErrNoClue
 	}
@@ -109,6 +124,7 @@ func ReadClientHello(data []byte) (*string, error) {
 		return nil, errNotClientHello
 	}
 
+	info := &TLSClientHelloInfo{}
 	for len(data) != 0 {
 		if len(data) < 4 {
 			return nil, errNotClientHello
@@ -149,19 +165,37 @@ func ReadClientHello(data []byte) (*string, error) {
 						return nil, errNotClientHello
 					}
 
-					return &serverName, nil
+					info.ServerName = serverName
+					break
 				}
 
 				d = d[nameLen:]
 			}
+		} else if extension == extensionEncryptedClientHello {
+			info.EncryptedClientHello = true
 		}
 		data = data[length:]
 	}
 
+	if info.ServerName != "" || info.EncryptedClientHello {
+		return info, nil
+	}
 	return nil, errNotTLS
 }
 
-func SniffTLS(b []byte) (*string, error) {
+// ReadClientHello returns server name (if any) from TLS client hello message.
+func ReadClientHello(data []byte) (*string, error) {
+	info, err := ReadClientHelloInfo(data)
+	if err != nil {
+		return nil, err
+	}
+	if info.ServerName == "" {
+		return nil, errNotTLS
+	}
+	return &info.ServerName, nil
+}
+
+func SniffTLSInfo(b []byte) (*TLSClientHelloInfo, error) {
 	if len(b) < 5 {
 		return nil, ErrNoClue
 	}
@@ -180,9 +214,20 @@ func SniffTLS(b []byte) (*string, error) {
 		}
 	}
 
-	domain, err := ReadClientHello(b[5 : 5+headerLen])
+	info, err := ReadClientHelloInfo(b[5 : 5+headerLen])
 	if err == nil {
-		return domain, nil
+		return info, nil
 	}
 	return nil, err
+}
+
+func SniffTLS(b []byte) (*string, error) {
+	info, err := SniffTLSInfo(b)
+	if err != nil {
+		return nil, err
+	}
+	if info.ServerName == "" {
+		return nil, errNotTLS
+	}
+	return &info.ServerName, nil
 }

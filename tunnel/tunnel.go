@@ -529,7 +529,12 @@ func handleTCPConn(connCtx C.ConnContext) {
 		return
 	}
 
-	if cfg := getMitmConfig(metadata); cfg != nil {
+	cfg, mitmDecision := getMitmConfig(conn, metadata)
+	switch mitmDecision {
+	case mitmDecisionReject:
+		log.Debugln("[MITM] reject encrypted SNI traffic %s --> %s", metadata.SourceDetail(), metadata.RemoteAddress())
+		return
+	case mitmDecisionHandle:
 		opt, err := mitm.NewOption(rewrite.NewHandler(cfg.Rules))
 		if err != nil {
 			log.Warnln("[MITM] initialize failed: %s", err.Error())
@@ -622,18 +627,98 @@ func handleTCPConn(connCtx C.ConnContext) {
 	handleSocket(conn, remoteConn)
 }
 
-func getMitmConfig(metadata *C.Metadata) *C.MitmConfig {
+type mitmDecision int
+
+const (
+	mitmDecisionSkip mitmDecision = iota
+	mitmDecisionHandle
+	mitmDecisionReject
+)
+
+type mitmPrefilterResult struct {
+	host         string
+	encryptedSNI bool
+}
+
+func getMitmConfig(conn *N.BufferedConn, metadata *C.Metadata) (*C.MitmConfig, mitmDecision) {
 	if metadata.NetWork != C.TCP || metadata.Type == C.MITM || metadata.Type == C.INNER {
-		return nil
+		return nil, mitmDecisionSkip
 	}
 
 	configMux.RLock()
 	cfg := mitmConfig
 	configMux.RUnlock()
 	if cfg == nil || !cfg.ShouldHandle(metadata.DstPort) {
-		return nil
+		return nil, mitmDecisionSkip
 	}
-	return cfg
+	if !cfg.HasDomainFilter() {
+		return cfg, mitmDecisionHandle
+	}
+
+	prefilter := sniffMitmPrefilterHost(conn)
+	if prefilter.encryptedSNI {
+		switch cfg.EncryptedSNIPolicy {
+		case C.MitmEncryptedSNIMitm:
+			return cfg, mitmDecisionHandle
+		case C.MitmEncryptedSNIReject:
+			return nil, mitmDecisionReject
+		default:
+			return nil, mitmDecisionSkip
+		}
+	}
+
+	if prefilter.host != "" {
+		if cfg.ShouldHandleDomain(prefilter.host) {
+			metadata.SniffHost = prefilter.host
+			return cfg, mitmDecisionHandle
+		}
+		return nil, mitmDecisionSkip
+	}
+
+	if cfg.ShouldHandleDomain(metadata.RuleHost()) {
+		return cfg, mitmDecisionHandle
+	}
+	return nil, mitmDecisionSkip
+}
+
+func sniffMitmPrefilterHost(conn *N.BufferedConn) mitmPrefilterResult {
+	result := mitmPrefilterResult{}
+	_ = conn.SetReadDeadline(time.Now().Add(time.Second))
+	_, err := conn.Peek(1)
+	_ = conn.SetReadDeadline(time.Time{})
+	if err != nil {
+		return result
+	}
+
+	bufferedLen := conn.Buffered()
+	if bufferedLen == 0 {
+		return result
+	}
+	bytes, err := conn.Peek(bufferedLen)
+	if err != nil {
+		return result
+	}
+
+	tlsInfo, err := sniffer.SniffTLSInfo(bytes)
+	if length, ok := sniffer.NeedMoreDataLength(err); ok {
+		_ = conn.SetReadDeadline(time.Now().Add(time.Second))
+		bytes, err = conn.Peek(length)
+		_ = conn.SetReadDeadline(time.Time{})
+		if err == nil {
+			tlsInfo, err = sniffer.SniffTLSInfo(bytes)
+		}
+	}
+	if err == nil {
+		result.host = tlsInfo.ServerName
+		result.encryptedSNI = tlsInfo.EncryptedClientHello
+		return result
+	}
+
+	host, err := sniffer.SniffHTTP(bytes)
+	if err == nil && host != nil {
+		result.host = *host
+	}
+	return result
 }
 
 func logMetadataErr(metadata *C.Metadata, rule C.Rule, proxy C.ProxyAdapter, err error) {

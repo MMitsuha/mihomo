@@ -3,6 +3,7 @@ package constant
 import (
 	"encoding/json"
 	"errors"
+	"strings"
 
 	regexp "github.com/dlclark/regexp2"
 )
@@ -118,10 +119,74 @@ type RewriteRule interface {
 	SearchInResponse(func(Rewrite) bool) bool
 }
 
+var MitmEncryptedSNIPolicyMapping = map[string]MitmEncryptedSNIPolicy{
+	MitmEncryptedSNISkip.String():   MitmEncryptedSNISkip,
+	MitmEncryptedSNIMitm.String():   MitmEncryptedSNIMitm,
+	MitmEncryptedSNIReject.String(): MitmEncryptedSNIReject,
+}
+
+const (
+	MitmEncryptedSNISkip MitmEncryptedSNIPolicy = iota
+	MitmEncryptedSNIMitm
+	MitmEncryptedSNIReject
+)
+
+type MitmEncryptedSNIPolicy int
+
+func (p *MitmEncryptedSNIPolicy) UnmarshalYAML(unmarshal func(any) error) error {
+	var policy string
+	if err := unmarshal(&policy); err != nil {
+		return err
+	}
+	mode, exist := MitmEncryptedSNIPolicyMapping[policy]
+	if !exist {
+		return errors.New("invalid MITM encrypted-sni-policy")
+	}
+	*p = mode
+	return nil
+}
+
+func (p MitmEncryptedSNIPolicy) MarshalYAML() (any, error) {
+	return p.String(), nil
+}
+
+func (p *MitmEncryptedSNIPolicy) UnmarshalJSON(data []byte) error {
+	var policy string
+	if err := json.Unmarshal(data, &policy); err != nil {
+		return err
+	}
+	mode, exist := MitmEncryptedSNIPolicyMapping[policy]
+	if !exist {
+		return errors.New("invalid MITM encrypted-sni-policy")
+	}
+	*p = mode
+	return nil
+}
+
+func (p MitmEncryptedSNIPolicy) MarshalJSON() ([]byte, error) {
+	return json.Marshal(p.String())
+}
+
+func (p MitmEncryptedSNIPolicy) String() string {
+	switch p {
+	case MitmEncryptedSNISkip:
+		return "skip"
+	case MitmEncryptedSNIMitm:
+		return "mitm"
+	case MitmEncryptedSNIReject:
+		return "reject"
+	default:
+		return "Unknown"
+	}
+}
+
 type MitmConfig struct {
-	Enable bool        `json:"enable"`
-	Ports  []uint16    `json:"ports"`
-	Rules  RewriteRule `json:"-"`
+	Enable             bool                   `json:"enable"`
+	Domain             []string               `json:"domain,omitempty"`
+	Ports              []uint16               `json:"ports"`
+	Rules              RewriteRule            `json:"-"`
+	DomainMatchers     []DomainMatcher        `json:"-"`
+	EncryptedSNIPolicy MitmEncryptedSNIPolicy `json:"encrypted-sni-policy"`
 }
 
 func (m *MitmConfig) ShouldHandle(port uint16) bool {
@@ -130,6 +195,31 @@ func (m *MitmConfig) ShouldHandle(port uint16) bool {
 	}
 	for _, candidate := range m.Ports {
 		if candidate == port {
+			return true
+		}
+	}
+	return false
+}
+
+func (m *MitmConfig) HasDomainFilter() bool {
+	return m != nil && len(m.DomainMatchers) > 0
+}
+
+func (m *MitmConfig) ShouldHandleDomain(host string) bool {
+	if m == nil {
+		return false
+	}
+	if !m.HasDomainFilter() {
+		return true
+	}
+
+	host = strings.TrimSpace(strings.TrimSuffix(strings.ToLower(host), "."))
+	if host == "" {
+		return false
+	}
+
+	for _, matcher := range m.DomainMatchers {
+		if matcher.MatchDomain(host) {
 			return true
 		}
 	}
