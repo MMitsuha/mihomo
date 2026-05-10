@@ -64,6 +64,40 @@ tls:
       format/pem...
       -----END CERTIFICATE-----
 
+# MITM 配置，默认关闭。启用后会对匹配目标端口的 TCP 流量进行 HTTP/HTTPS 解密代理和重写
+# 首次使用会在配置目录自动生成 mitm_ca.crt 和 mitm_ca.key
+# 需要将 mitm_ca.crt 安装到客户端的受信任根证书中
+# 也可以通过代理访问 http://mitm.mihomo/cert.crt 或 http://mitm.clash/cert.crt 下载根证书
+mitm:
+  enable: false
+  ports:
+    - 80
+    - 443
+  # rules 按配置顺序匹配，同一阶段只会应用第一条命中的规则
+  # 可用 action:
+  # reject, reject-200, reject-img, reject-dict, reject-array：直接返回 404/200/1x1 PNG/{}/[]
+  # '302', '307'：返回重定向响应
+  # request-header, request-body, response-header, response-body
+  # url 使用正则匹配完整 URL；302/307 的 new 支持 $1、$2 等 URL 捕获组替换
+  # header/body 重写的 old 使用正则，new 支持 $1、$2 等捕获组替换；old 不填时默认匹配全部内容
+  # body 重写仅处理已知 Content-Length 且 Content-Type 为文本类内容的请求/响应
+  rules:
+    - url: '^https?://ads\.example\.com/.*'
+      action: reject
+    - url: '^https?://ads\.example\.com/pixel'
+      action: reject-img
+    - url: '^https?://api\.example\.com/v1/(.*)'
+      action: '302'
+      new: 'https://api.example.com/v2/$1'
+    - url: '^https?://example\.com/.*'
+      action: request-header
+      old: 'User-Agent: .*'
+      new: 'User-Agent: mihomo-mitm'
+    - url: '^https?://example\.com/score'
+      action: response-body
+      old: '"score":\d+'
+      new: '"score":999'
+
 external-controller: 0.0.0.0:9093 # RESTful API 监听地址
 external-controller-tls: 0.0.0.0:9443 # RESTful API HTTPS 监听地址，需要配置 tls 部分配置文件
 # secret: "123456" # `Authorization:Bearer ${secret}`
