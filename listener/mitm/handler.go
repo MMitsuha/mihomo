@@ -136,7 +136,9 @@ func relayWebsocket(client, upstream *N.BufferedConn, req *http.Request) error {
 	if resp.StatusCode != http.StatusSwitchingProtocols {
 		return nil
 	}
-	go N.Relay(upstream, client)
+	// N.Relay is bidirectional: it copies one direction in a goroutine and
+	// the other in the caller, then closes both conns. A second call would
+	// race four copy goroutines on the same socket pair and double-close.
 	N.Relay(client, upstream)
 	return nil
 }

@@ -175,7 +175,7 @@ func passthrough(conn *N.BufferedConn, target *C.Metadata, tunnel C.Tunnel, addi
 	adds = append(adds, inbound.WithIntercepted(true))
 	c, m := inbound.NewHTTP(dstAddr, conn, right, adds...)
 	go tunnel.HandleTCPConn(c, m)
-	go N.Relay(left, conn)
+	// N.Relay is bidirectional and closes both ends; one call is enough.
 	N.Relay(conn, left)
 }
 
