@@ -70,9 +70,19 @@ tls:
 # 也可以通过代理访问 http://mitm.mihomo/cert.crt 或 http://mitm.clash/cert.crt 下载根证书
 mitm:
   enable: false
+  # MITM 域名白名单；不配置时仅按 ports 判断
+  # 匹配行为与 sniffer.force-domain、dns.fake-ip-filter 等域名配置一致：
+  # example.com 仅匹配自身，+.example.com 匹配自身和所有子域名
+  # 也支持 DomainTrie 语法：*.example.com、.example.com，以及 geosite: 和 rule-set:
+  domain:
+    - +.example.com
+    - domain.com
   ports:
     - 80
     - 443
+  # 当检测到 ECH/Encrypted ClientHello 时的处理策略：
+  # skip：跳过 MITM，继续按普通连接处理；mitm：仍然执行 MITM；reject：关闭连接
+  encrypted-sni-policy: skip
   # rules 按配置顺序匹配，同一阶段只会应用第一条命中的规则
   # 可用 action:
   # reject, reject-200, reject-img, reject-dict, reject-array：直接返回 404/200/1x1 PNG/{}/[]
