@@ -237,3 +237,94 @@ func TestRuleReplaceSubMultibyte(t *testing.T) {
 		t.Errorf("ReplaceSubPayload = %q, want %q", got, want)
 	}
 }
+
+// TestRuleReplaceSubInvalidUTF8 checks that bodies containing bytes which
+// aren't valid UTF-8 are returned unchanged. Re-encoding via []rune would
+// substitute U+FFFD and corrupt the payload — the rewriter must skip the
+// substitution rather than mangle binary content that slipped past the
+// content-type allowlist.
+func TestRuleReplaceSubInvalidUTF8(t *testing.T) {
+	old := `foo`
+	raw := RawRule{URL: `.*`, Action: C.MitmResponseBody, Old: &old, New: "bar"}
+	rule, err := ParseRule(raw)
+	if err != nil {
+		t.Fatalf("ParseRule: %v", err)
+	}
+	// Lone 0xff is invalid UTF-8 — Latin-1 encoded "ÿ", binary blob, etc.
+	in := "foo\xffbar"
+	if got := rule.ReplaceSubPayload(in); got != in {
+		t.Errorf("ReplaceSubPayload = %q, want %q (input unchanged)", got, in)
+	}
+}
+
+// TestExpandBackrefs covers the placeholder substitution: $$ escape, $10+
+// indices, and that capture-group content containing literal $N tokens
+// doesn't get re-substituted in subsequent iterations.
+func TestExpandBackrefs(t *testing.T) {
+	cases := []struct {
+		name    string
+		payload string
+		groups  []string
+		want    string
+	}{
+		{"single", "x=$1", []string{"full", "abc"}, "x=abc"},
+		{"two-digit", "$11", []string{"0", "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k"}, "k"},
+		{"two-digit-out-of-range", "$12", []string{"0", "a"}, "a2"},
+		{"escape", "$$1=$1", []string{"full", "v"}, "$1=v"},
+		{"trailing-dollar", "x$", []string{"full"}, "x$"},
+		{"non-digit-after-dollar", "$x", []string{"full"}, "$x"},
+		{"out-of-range", "$5", []string{"full", "a"}, ""},
+		// Capture-group content containing $N must NOT be re-substituted.
+		{"no-cascade", "$1-$2", []string{"full", "$2", "B"}, "$2-B"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := expandBackrefs(tc.payload, tc.groups); got != tc.want {
+				t.Errorf("expandBackrefs(%q, %v) = %q, want %q", tc.payload, tc.groups, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestRuleReplaceURLNoCascade locks in single-pass URL substitution: a
+// captured value containing $N must not pivot subsequent placeholders.
+func TestRuleReplaceURLNoCascade(t *testing.T) {
+	raw := RawRule{
+		URL:    `^https?://example\.com/(.*)/(.*)`,
+		Action: C.Mitm302,
+		New:    "https://x/$1/$2",
+	}
+	rule, err := ParseRule(raw)
+	if err != nil {
+		t.Fatalf("ParseRule: %v", err)
+	}
+	// Group 1 contains literal "$2"; the legacy ReplaceAll-based code would
+	// substitute that into the second pass and emit "https://x/end/end".
+	got := rule.ReplaceURLPayload([]string{"full", "$2", "end"})
+	want := "https://x/$2/end"
+	if got != want {
+		t.Errorf("ReplaceURLPayload = %q, want %q", got, want)
+	}
+}
+
+// TestExtractHostPatternCharClass guards against premature termination on
+// regex characters that nest a `/`, `?`, or `:` inside a `[...]` or `(...)`.
+// Falling back to `""` would mark every rule as host-permissive and trigger
+// TLS termination on every host on the configured ports.
+func TestExtractHostPatternCharClass(t *testing.T) {
+	cases := []struct {
+		in   string
+		want string
+	}{
+		{`^https?://[^/]+\.example\.com/.*`, `[^/]+\.example\.com`},
+		{`^https?://(?:api|cdn)\.foo\.com/.*`, `(?:api|cdn)\.foo\.com`},
+		{`^https?://[a-z0-9-]+\.example\.com/.*`, `[a-z0-9-]+\.example\.com`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.in, func(t *testing.T) {
+			if got := extractHostPattern(tc.in); got != tc.want {
+				t.Errorf("extractHostPattern(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}

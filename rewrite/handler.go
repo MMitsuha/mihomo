@@ -79,17 +79,27 @@ func (Handler) HandleRequest(session *mitm.Session) (*http.Request, *http.Respon
 		resp.Close = true
 		return nil, resp
 	case C.MitmRequestHeader:
-		newHdr, ok := replaceHeader(req.Header, rule)
+		// Go's parser lifts the Host: line into req.Host and removes it from
+		// req.Header — so a user rule like `old: 'Host: example\.com'`
+		// against the raw header set wouldn't match anything. Splice Host
+		// back in for the regex to see, then strip it out again afterwards
+		// (req.Host is what http.Request.Write actually serialises).
+		hdrForRewrite := req.Header.Clone()
+		if hdrForRewrite == nil {
+			hdrForRewrite = http.Header{}
+		}
+		if req.Host != "" && hdrForRewrite.Get("Host") == "" {
+			hdrForRewrite.Set("Host", req.Host)
+		}
+		newHdr, ok := replaceHeader(hdrForRewrite, rule)
 		if !ok {
 			return nil, nil
 		}
-		req.Header = newHdr
-		// http.Request.Write emits the Host line from req.Host, not from
-		// req.Header["Host"]. Propagate so user-authored Host rewrites
-		// actually take effect upstream.
 		if h := newHdr.Get("Host"); h != "" {
 			req.Host = h
+			newHdr.Del("Host")
 		}
+		req.Header = newHdr
 		return req, nil
 	case C.MitmRequestBody:
 		if !CanRewriteRequestBody(req.ContentLength, req.Header.Get("Content-Type")) {
@@ -130,10 +140,31 @@ func (Handler) HandleResponse(session *mitm.Session) *http.Response {
 			return nil
 		}
 		resp.Header = newHdr
-		resp.Header.Set("Content-Length", strconv.FormatInt(resp.ContentLength, 10))
+		// Only stamp Content-Length back if the wire form actually had one.
+		// For chunked / close-delimited responses ContentLength is -1, and
+		// emitting `Content-Length: -1` would be a header rewrite of its own.
+		// (metacubex/http drops the header at write time anyway, but we
+		// still don't want it leaking via session inspection.)
+		if resp.ContentLength >= 0 {
+			resp.Header.Set("Content-Length", strconv.FormatInt(resp.ContentLength, 10))
+		} else {
+			resp.Header.Del("Content-Length")
+		}
 		return resp
 	case C.MitmResponseBody:
+		// HEAD responses carry headers (and a possibly non-zero Content-Length)
+		// but no body. Rewriting would zero out the advertised length and
+		// strip Content-Encoding from the metadata, which is misleading.
+		if req.Method == http.MethodHead {
+			return nil
+		}
 		if !CanRewriteResponseBody(resp.ContentLength, resp.Header.Get("Content-Type")) {
+			return nil
+		}
+		// Encoding we can't decode safely — leave the response alone rather
+		// than strip Content-Encoding and ship raw compressed bytes as if
+		// they were plaintext.
+		if !mitm.IsRewritableEncoding(resp.Header.Get("Content-Encoding")) {
 			return nil
 		}
 		body, err := mitm.ReadDecompressedBody(resp, MaxRewriteBodySize)
@@ -174,8 +205,10 @@ func htmlResponse(session *mitm.Session, status int) *http.Response {
 }
 
 // replaceHeader applies a header-substitution rule on the wire-format header
-// block, then re-parses it. Returns ok=false if there are no headers or if
-// re-parsing fails.
+// block, then re-parses it. Returns ok=false if there are no headers, if
+// re-parsing fails, or if the rewrite collapsed the header set to empty —
+// otherwise an over-eager rule (`old: '.*'`, `new: ''`) would wipe the
+// entire request/response.
 func replaceHeader(h http.Header, rule C.Rewrite) (http.Header, bool) {
 	if len(h) == 0 {
 		return nil, false
@@ -186,10 +219,19 @@ func replaceHeader(h http.Header, rule C.Rewrite) (http.Header, bool) {
 		return nil, false
 	}
 	updated := rule.ReplaceSubPayload(raw.String())
+	if updated == raw.String() {
+		// Regex didn't match — surface a no-op so the caller leaves req/resp
+		// untouched (otherwise we re-parse and clobber header ordering /
+		// canonicalisation for nothing).
+		return nil, false
+	}
 
 	tp := textproto.NewReader(bufio.NewReader(strings.NewReader(updated)))
 	parsed, err := tp.ReadMIMEHeader()
 	if err != nil && !errors.Is(err, io.EOF) {
+		return nil, false
+	}
+	if len(parsed) == 0 {
 		return nil, false
 	}
 	return http.Header(parsed), true

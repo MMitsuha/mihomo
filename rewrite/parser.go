@@ -72,6 +72,13 @@ func compileHostMatcher(urlPattern string) *regexp.Regexp {
 // extractHostPattern pulls the host portion out of a URL regex. It expects
 // patterns shaped like `^https?://<host>/...` (or http/https variants) and
 // returns the regex string for <host>, or "" if the input doesn't fit.
+//
+// Common host fragments use regex constructs that contain the same characters
+// we'd otherwise treat as host terminators, e.g. `[^/]+`, `(?:foo|bar)`, IPv6
+// brackets `\[::1\]`. Track the bracket / paren nesting so those don't cause
+// a premature truncation; falling back to "" (which compileHostMatcher
+// translates into "permissive — match every host") is far more disruptive
+// here, because every targeted port then gets every host's TLS terminated.
 func extractHostPattern(urlPattern string) string {
 	s := strings.TrimSpace(urlPattern)
 	s = strings.TrimPrefix(s, "^")
@@ -89,10 +96,34 @@ func extractHostPattern(urlPattern string) string {
 	}
 
 	end := len(s)
+	classDepth := 0
+	groupDepth := 0
 	for i := 0; i < len(s); i++ {
 		c := s[i]
 		if c == '\\' && i+1 < len(s) {
 			i++ // skip the escaped char
+			continue
+		}
+		if classDepth > 0 {
+			if c == ']' {
+				classDepth--
+			}
+			continue
+		}
+		switch c {
+		case '[':
+			classDepth++
+			continue
+		case '(':
+			groupDepth++
+			continue
+		case ')':
+			if groupDepth > 0 {
+				groupDepth--
+			}
+			continue
+		}
+		if groupDepth > 0 {
 			continue
 		}
 		if c == '/' || c == '?' || c == '$' || c == ':' {
