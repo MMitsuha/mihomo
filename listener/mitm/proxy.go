@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -43,6 +44,14 @@ func HandleConn(c net.Conn, metadata *C.Metadata, tunnel C.Tunnel, opt *Option) 
 	if err != nil {
 		handleError(opt, nil, err)
 		_ = conn.Close()
+		return
+	}
+	if connState != nil && connState.NegotiatedProtocol == http.Http2NextProtoTLS {
+		handleHTTP2Conn(conn, connState, sourceAddr, metadata, tunnel, opt)
+		return
+	}
+	if connState == nil && isBufferedHTTP2(conn) {
+		handleHTTP2Conn(conn, nil, sourceAddr, metadata, tunnel, opt)
 		return
 	}
 
@@ -80,7 +89,11 @@ func HandleConn(c net.Conn, metadata *C.Metadata, tunnel C.Tunnel, opt *Option) 
 		}
 
 		if isCertificateRequest(request) {
-			if err = handleCertificateRequest(session); err != nil {
+			if err = prepareCertificateResponse(session); err != nil {
+				handleError(opt, session, err)
+				continue
+			}
+			if err = session.writeResponse(); err != nil {
 				handleError(opt, session, err)
 			}
 			continue
@@ -134,6 +147,89 @@ func HandleConn(c net.Conn, metadata *C.Metadata, tunnel C.Tunnel, opt *Option) 
 	_ = conn.Close()
 }
 
+func handleHTTP2Conn(conn *N.BufferedConn, connState *tls.ConnectionState, sourceAddr net.Addr, metadata *C.Metadata, tunnel C.Tunnel, opt *Option) {
+	transport, err := newServerTransport(sourceAddr, metadata, tunnel)
+	if err != nil {
+		handleError(opt, nil, err)
+		_ = conn.Close()
+		return
+	}
+	defer transport.CloseIdleConnections()
+
+	server := &http.Server{
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+			handleHTTP2Request(w, request, connState, sourceAddr, metadata, opt, transport)
+		}),
+	}
+	http2Server := &http.Http2Server{}
+	_ = http.Http2ConfigureServer(server, http2Server)
+	http2Server.ServeConn(conn, &http.Http2ServeConnOpts{BaseConfig: server})
+}
+
+func handleHTTP2Request(w http.ResponseWriter, request *http.Request, connState *tls.ConnectionState, sourceAddr net.Addr, metadata *C.Metadata, opt *Option, transport *http.Transport) {
+	session := newSession(nil, request, nil)
+	defer request.Body.Close()
+
+	request.RemoteAddr = sourceAddr.String()
+	prepareRequest(connState, request, metadata)
+	if request.Method == http.MethodConnect {
+		session.response = session.NewResponse(http.StatusMethodNotAllowed, nil)
+		session.response.Close = true
+		if err := writeHTTPResponse(w, session); err != nil {
+			handleError(opt, session, err)
+		}
+		return
+	}
+
+	if isCertificateRequest(request) {
+		if err := prepareCertificateResponse(session); err != nil {
+			session.response = session.NewErrorResponse(err)
+		}
+		if err := writeHTTPResponse(w, session); err != nil {
+			handleError(opt, session, err)
+		}
+		return
+	}
+
+	removeHopByHopHeaders(request.Header)
+	removeExtraHTTPHostPort(request)
+
+	newReq, newRes := opt.Handler.HandleRequest(session)
+	if newReq != nil {
+		session.request = newReq
+		request = newReq
+	}
+	if newRes != nil {
+		session.response = newRes
+		if err := writeHTTPResponse(w, session); err != nil {
+			handleError(opt, session, err)
+		}
+		return
+	}
+
+	request.RequestURI = ""
+	if request.URL.Host == "" {
+		session.response = session.NewErrorResponse(ErrInvalidURL)
+	} else {
+		ctx := context.WithValue(request.Context(), mitmUserAgentContextKey{}, request.Header.Get("User-Agent"))
+		request = request.WithContext(ctx)
+		session.request = request
+		response, err := transport.RoundTrip(request)
+		if err != nil {
+			session.response = session.NewErrorResponse(err)
+		} else {
+			session.response = response
+		}
+	}
+
+	if res := opt.Handler.HandleResponse(session); res != nil {
+		session.response = res
+	}
+	if err := writeHTTPResponse(w, session); err != nil {
+		handleError(opt, session, err)
+	}
+}
+
 func prepareClientConn(conn *N.BufferedConn, metadata *C.Metadata, opt *Option) (*N.BufferedConn, *tls.ConnectionState, error) {
 	_ = conn.SetReadDeadline(time.Now().Add(C.DefaultTLSTimeout))
 	b, err := conn.Peek(1)
@@ -164,6 +260,16 @@ func isBufferedHTTP(conn *N.BufferedConn) bool {
 		return false
 	}
 	return isHTTPTraffic(buf)
+}
+
+func isBufferedHTTP2(conn *N.BufferedConn) bool {
+	_ = conn.SetReadDeadline(time.Now().Add(time.Second))
+	buf, err := conn.Peek(len(http.Http2ClientPreface))
+	_ = conn.SetReadDeadline(time.Time{})
+	if err != nil {
+		return false
+	}
+	return string(buf) == http.Http2ClientPreface
 }
 
 func rawRelayRequest(metadata *C.Metadata, connState *tls.ConnectionState) *http.Request {
@@ -224,7 +330,7 @@ func isCertificateRequest(request *http.Request) bool {
 	return strings.EqualFold(request.URL.Path, "/cert.crt")
 }
 
-func handleCertificateRequest(session *Session) error {
+func prepareCertificateResponse(session *Session) error {
 	b, err := RootCAPEM()
 	if err != nil {
 		return err
@@ -235,7 +341,7 @@ func handleCertificateRequest(session *Session) error {
 	session.response.Header.Set("Content-Type", "application/x-x509-ca-cert")
 	session.response.ContentLength = int64(len(b))
 	session.response.Header.Set("Content-Length", fmt.Sprintf("%d", len(b)))
-	return session.writeResponse()
+	return nil
 }
 
 func writeResponseWithHandler(session *Session, opt *Option, keepAlive bool) error {
@@ -257,6 +363,43 @@ func writeResponse(session *Session, keepAlive bool) error {
 	}
 
 	return session.writeResponse()
+}
+
+func writeHTTPResponse(w http.ResponseWriter, session *Session) error {
+	if session.response == nil {
+		return ErrInvalidResponse
+	}
+	defer session.response.Body.Close()
+
+	removeHopByHopHeaders(session.response.Header)
+	if session.response.ContentLength >= 0 && session.response.Header.Get("Content-Length") == "" {
+		session.response.Header.Set("Content-Length", strconv.FormatInt(session.response.ContentLength, 10))
+	}
+	for key, values := range session.response.Header {
+		for _, value := range values {
+			w.Header().Add(key, value)
+		}
+	}
+	w.WriteHeader(session.response.StatusCode)
+	if !shouldWriteHTTPResponseBody(session.request, session.response) {
+		return nil
+	}
+	_, err := io.Copy(w, session.response.Body)
+	return err
+}
+
+func shouldWriteHTTPResponseBody(request *http.Request, response *http.Response) bool {
+	if request != nil && request.Method == http.MethodHead {
+		return false
+	}
+	if response.StatusCode >= 100 && response.StatusCode <= 199 {
+		return false
+	}
+	switch response.StatusCode {
+	case http.StatusNoContent, http.StatusNotModified:
+		return false
+	}
+	return true
 }
 
 func handleError(opt *Option, session *Session, err error) {
